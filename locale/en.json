@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Download Progress",
+    "description": "Shows a live download progress bar with size and speed while tools fetch or load data."
+  }
+}

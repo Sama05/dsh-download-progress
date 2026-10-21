@@ -1,0 +1,3 @@
+- insert:
+    - id: dsh-download-progress
+      name: '@local/dsh-download-progress'
