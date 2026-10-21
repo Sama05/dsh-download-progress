@@ -4,3 +4,6 @@ node_modules/
 *.tmp
 .DS_Store
 Thumbs.db
+
+# scratch space for manual experiments (probe scripts, downloaded fixtures)
+dev/

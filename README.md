@@ -1,7 +1,7 @@
 # dsh-download-progress
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![AI-assisted](https://img.shields.io/badge/AI--assisted-DeepSeek-6e6ef7.svg)](#8-ai-开发声明)
+[![AI-assisted](https://img.shields.io/badge/AI--assisted-DeepSeek-6e6ef7.svg)](#9-ai-开发声明)
 
 在 DSH 执行任务的过程中，一旦 agent 开始下载/加载某个东西，窗口下方自动浮出一条进度条。
 
@@ -460,6 +460,7 @@ plugin_manager action=remove_bundle target="@local/dsh-download-progress"
 
 ```
 node smoke.mjs
+node smoke-host.mjs
 ```
 
 `smoke.mjs` 在假的 `window` 里加载 `client.js`，用极简 React 替身把两个槽位各渲染一次，
@@ -474,6 +475,11 @@ node smoke.mjs
 以及出现动画：**默认 `float`**、**下拉切到 `crt` / `ripple` / `none` 时每张卡片的 `ddp-ease-*` 类跟着变**、**动画类只在卡片上，容器不带**、**入场按 55ms 错峰**。
 改完 UI 跑一次就知道有没有改崩。
 
+`smoke-host.mjs` 则直接 import 三个 Host 模块（`utils.js` / `detect.js` / `state.js`，都不依赖宿主），
+用假 `fs` 喂时间序列来断言：分类规则、命令行路径解析（引号 / `cwd` / `-O` / 变量不可解析）、
+速度滑动窗口、收尾回收时机、以及 `/download-progress/state` 的 JSON 字段契约。
+它不需要启动 DSH，所以改 Host 逻辑也能离线回归。
+
 ---
 
 ## 7. 文件清单
@@ -482,17 +488,59 @@ node smoke.mjs
 | --- | --- |
 | `package.json` | 包声明；`dsh.bundle.patch` 指向 `cordis.patch.yml`；`dsh.client` 声明 Web 客户端半 |
 | `cordis.patch.yml` | bundle 挂载：`insert` 一行 `id: dsh-download-progress` |
-| `index.js` | Host 半：分类、采样、状态机、`/download-progress/state` 路由 |
+| `index.js` | Host 半入口：只做接线（订阅事件、起采样定时器、注册路由） |
+| `detect.js` | 工具分类：哪些工具算下载/搜索/抓取/安装，以及命令行里解析目标路径与 URL |
+| `state.js` | 任务状态机：建任务、每秒采样文件大小、算速度、收尾回收 |
+| `utils.js` | 无副作用的纯函数（截断、取行、去重、URL 提取） |
 | `client.js` | Client 半：`CSS` + `describe()` + `Card` + `Overlay` + 设置页 |
 | `smoke.mjs` | 离线冒烟测试（假 window + 假 React，不需要浏览器） |
+| `smoke-host.mjs` | Host 半离线测试（假 `fs`，不需要启动 DSH） |
 | `locale/en.json` / `locale/zh.json` | 插件元数据标题（插件列表里显示的名字） |
 | `icon.svg` | 插件图标 |
 | `LICENSE` | MIT 许可证 |
 | `.gitignore` | 忽略 `node_modules/`、测试下载残留（`*.bin`、`*.log`） |
 
+拆成四个 Host 文件的理由：`index.js` 曾是 340 行、混着正则、状态机和接线，改一处要通读全部。
+现在分类规则改 `detect.js`、采样逻辑改 `state.js`、纯函数改 `utils.js`，`index.js` 只负责把三者接到宿主上。
+四个文件都是同目录下的相对 `import`，由 Node ESM 原生解析，不需要打包器，也不增加依赖。
+
 ---
 
-## 8. AI 开发声明
+## 8. 优势与已知短板
+
+写给评估这个插件的人：它能做什么、靠什么做到、以及在什么情况下会让你失望。
+
+### 8.1 优势
+
+| 优势 | 具体表现 |
+| --- | --- |
+| **零核心改动** | 不 patch 宿主、不改 `cordis.yml`、不碰 `agent-loop`。用的是官方公开的 4 个扩展点：`tools/execute` 瀑布钩子、`plugin-manager/install-log` 事件、`webServer.register` 路由、`shell.overlay` / `settings.section` 插槽。宿主升级时这些名字变了才会坏，见 §5.1 |
+| **零第三方依赖** | Host 半只用 `node:fs` / `node:path`；Client 半只用宿主已提供的 `react`。没有 npm 依赖，没有构建步骤，`git clone` 下来就能装 |
+| **不绑会话、跟着文件走** | 用户把 `curl` 丢进后台（`run_in_background`）后工具会提前返回，插件不看工具何时结束，而是看**文件是否还在变大**——最后 3 秒没长才收起。这是唯一能覆盖后台下载的信号 |
+| **UI 与逻辑彻底分离** | 全部样式集中在 `client.js` 顶部的 `CSS` 常量和一个 `<style>` 注入点，所有颜色走 `--ddp-*` / `--dsw-alias-*` 变量。改外观不动一行逻辑，换主题只加一个 token 对象 |
+| **出现不推挤布局** | 挂在 `shell.overlay`（浮动层，不参与排版），`position: fixed` + `transform` 定位，且拖动只写 `top/left`。出现/收起/悬停展开都不会让聊天区跳动 |
+| **离线可测** | `smoke.mjs` 用假 window + 假 React 跑真实组件树，覆盖 30+ 条断言：槽位注册、卡片渲染、拖动基准、悬停宽限期、主题切换、hook 数量一致性。不需要浏览器、不需要启动 DSH |
+| **可扩展的主题** | 内置跟随系统/亮色/暗色，且支持从 `localStorage` 读外部主题（JSON 里写一套 `--ddp-*` 变量即可），不必改代码 |
+
+### 8.2 短板（先说清楚，避免误解）
+
+| 短板 | 原因 | 影响 |
+| --- | --- | --- |
+| **不是"网卡收了多少"** | 宿主只在工具开始/结束时发事件，中间字节流不对外暴露（§1.4 逐条验证过） | 显示的是**目标文件在磁盘上长了多少**，所以不落盘的下载（`curl \| tar`、输出到 stdout）没有进度 |
+| **命令里的变量路径解析不了** | 插件只能读命令**文本**，不能求值 | `-o $dst` 会显示为字面量 `$dst` 且没有进度；必须写 `-o D:\path\file.bin` |
+| **总大小常常未知** | 需要额外发一次 `HEAD` 且对方要给 `Content-Length` | 拿不到总大小时降级为不确定进度条 + "已下载 12.4 MB · 3.2 MB/s"，没有百分比 |
+| **搜索/抓取只有"进行中"** | `web_fetch` 与搜索工具的响应是一次性返回的，没有中间事件 | 只有计时器，没有字节数——这是宿主能力边界，不是实现偷懒 |
+| **靠轮询而不是推送** | Client 半每秒 `fetch` 一次状态路由（`POLL_MS = 1000`） | 页面隐藏（`document.hidden`）时自动跳过轮询；代价是最多 1 秒延迟，换来不需要新增 Host→Client 事件白名单 |
+| **只在 desktop profile 验证过** | CLI 对 desktop profile 有写死限制，安装是手工链接的 | 换 profile / 换机器要重装，见 §6 |
+
+### 8.3 一句话定位
+
+它解决的是**"agent 在后台默默下载，用户不知道要等多久"** 这一个场景，用宿主已有的最小扩展点做到，代价是只能看见落盘的文件。
+如果哪天宿主开始对外投影工具执行的字节进度，这个插件应当改为消费那个事件，而不是继续 `fs.stat`——`state.js` 已经把这层隔离好了。
+
+---
+
+## 9. AI 开发声明
 
 本插件是 **AI 辅助开发（AI-assisted）** 的产物，请在使用、分发或二次开发时保留本声明。
 

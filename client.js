@@ -286,6 +286,84 @@ window.__ModuleLoader__.load({
 }
 `
 
+    /* ================================================================== */
+    /* Shared utilities                                                     */
+    /*                                                                      */
+    /* The host serves the client half as ONE bundle, so unlike the Host    */
+    /* half this file cannot import from a sibling module. Everything that  */
+    /* is used in more than one place therefore lives in this block, and    */
+    /* every call site below goes through it instead of re-deriving the     */
+    /* same values in its own little copy.                                  */
+    /* ================================================================== */
+
+    /** Join class names, dropping falsy entries: `cx('a', cond && 'b')`. */
+    function cx() {
+      return Array.prototype.filter.call(arguments, Boolean).join(' ')
+    }
+
+    /** Clamp a number into [lo, hi]. */
+    function clamp(n, lo, hi) {
+      return Math.max(lo, Math.min(hi, n))
+    }
+
+    /** Read and parse a localStorage key; any failure yields the fallback. */
+    function readJSON(key, fallback) {
+      try {
+        const raw = window.localStorage.getItem(key)
+        return raw ? JSON.parse(raw) : fallback
+      } catch {
+        /* private mode, corrupted value, or storage disabled */
+        return fallback
+      }
+    }
+
+    /** Persist a value. A full or blocked storage must not break the UI. */
+    function writeJSON(key, value) {
+      try {
+        window.localStorage.setItem(key, JSON.stringify(value))
+      } catch {
+        /* keep the in-memory value for this page */
+      }
+    }
+
+    const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB']
+
+    /**
+     * Human-readable size: `1234567` → `1.18 MB`.
+     * Precision drops as the number grows (0 / 1 / 2 decimals) so the readout
+     * never jitters between `9.99 MB` and `10.0 MB` on every poll.
+     */
+    function fmtBytes(n) {
+      const value = Number(n)
+      if (!Number.isFinite(value) || value <= 0) return '0 B'
+      let size = value
+      let unit = 0
+      while (size >= 1024 && unit < BYTE_UNITS.length - 1) {
+        size /= 1024
+        unit += 1
+      }
+      const text =
+        unit === 0 ? String(Math.round(size)) : size.toFixed(size >= 100 ? 0 : size >= 10 ? 1 : 2)
+      return text + ' ' + BYTE_UNITS[unit]
+    }
+
+    /** Bytes per second, or '' when there is no rate worth showing. */
+    function fmtSpeed(n) {
+      const value = Number(n)
+      return Number.isFinite(value) && value > 0 ? fmtBytes(value) + '/s' : ''
+    }
+
+    /** Milliseconds → whole seconds, floored at 0. */
+    function secs(ms) {
+      const value = Number(ms)
+      return Number.isFinite(value) && value > 0 ? Math.floor(value / 1000) : 0
+    }
+
+    /** The single line of context printed under every bar. */
+    function logOf(task) {
+      return String(task.log || '')
+    }
+
     /* ---------------- settings store (localStorage) ---------------- */
 
     const SETTINGS_KEY = 'dsh-download-progress:settings'
@@ -413,30 +491,24 @@ window.__ModuleLoader__.load({
 
     function loadExtraThemes() {
       if (extraThemes) return extraThemes
-      extraThemes = []
-      try {
-        const raw = window.localStorage.getItem(EXTRA_THEMES_KEY)
-        if (!raw) return extraThemes
-        const list = JSON.parse(raw)
-        if (!Array.isArray(list)) return extraThemes
-        extraThemes = list
-          .filter(
-            (entry) =>
-              entry &&
-              typeof entry.id === 'string' &&
-              entry.id &&
-              BUILTIN_IDS.indexOf(entry.id) < 0 &&
-              typeof entry.label === 'string' &&
-              entry.label,
-          )
-          .map((entry) => ({
-            id: entry.id,
-            label: entry.label,
-            tokens: sanitizeTokens(entry.tokens),
-          }))
-      } catch {
-        /* corrupted list: keep the built-ins only */
-      }
+      const list = readJSON(EXTRA_THEMES_KEY, null)
+      extraThemes = !Array.isArray(list)
+        ? []
+        : list
+            .filter(
+              (entry) =>
+                entry &&
+                typeof entry.id === 'string' &&
+                entry.id &&
+                BUILTIN_IDS.indexOf(entry.id) < 0 &&
+                typeof entry.label === 'string' &&
+                entry.label,
+            )
+            .map((entry) => ({
+              id: entry.id,
+              label: entry.label,
+              tokens: sanitizeTokens(entry.tokens),
+            }))
       return extraThemes
     }
 
@@ -461,9 +533,7 @@ window.__ModuleLoader__.load({
     function coord(value, fallback) {
       const n = Number(value)
       return Number.isFinite(n) && n >= 0 ? Math.round(n) : fallback
-    }
-
-    function normalize(input) {
+    }    function normalize(input) {
       const src = input && typeof input === 'object' ? input : {}
       const rows = Math.round(Number(src.maxVisible))
       return {
@@ -484,24 +554,13 @@ window.__ModuleLoader__.load({
 
     function readSettings() {
       if (cache) return cache
-      let stored = null
-      try {
-        const raw = window.localStorage.getItem(SETTINGS_KEY)
-        if (raw) stored = JSON.parse(raw)
-      } catch {
-        /* private mode / corrupted value: fall back to defaults */
-      }
-      cache = normalize(stored)
+      cache = normalize(readJSON(SETTINGS_KEY, null))
       return cache
     }
 
     function writeSettings(patch) {
       cache = normalize(Object.assign({}, readSettings(), patch))
-      try {
-        window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(cache))
-      } catch {
-        /* storage unavailable: keep the in-memory value for this page */
-      }
+      writeJSON(SETTINGS_KEY, cache)
       listeners.forEach((fn) => {
         try {
           fn()
@@ -536,6 +595,9 @@ window.__ModuleLoader__.load({
     // persisted and never mixed with real tasks: the moment a real task exists it
     // replaces the samples entirely.
     const FAKE_KINDS = ['download', 'install', 'fetch', 'search', 'pkg']
+
+    /** Sample cards tick faster than real data: they are a visual, not a poll. */
+    const SAMPLE_TICK_MS = 500
 
     const FAKE_TOTAL = 29674910
     const FAKE_RATE = 3.4 * 1024 * 1024
@@ -607,7 +669,7 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         if (!active) return undefined
         setNow(Date.now())
-        const timer = setInterval(() => setNow(Date.now()), 500)
+        const timer = setInterval(() => setNow(Date.now()), SAMPLE_TICK_MS)
         return () => clearInterval(timer)
       }, [active, startedAt])
       if (!active || !startedAt) return []
@@ -640,8 +702,9 @@ window.__ModuleLoader__.load({
       return { visible, leaving }
     }
 
-    /* ---------------- helpers ---------------- */
+    /* ---------------- data ---------------- */
 
+    /** Absolute URL of the host snapshot route, robust to a missing location. */
     function stateUrl() {
       try {
         return new URL(ROUTE, window.location.origin).toString()
@@ -649,32 +712,6 @@ window.__ModuleLoader__.load({
         return ROUTE
       }
     }
-
-    function fmtBytes(n) {
-      const v0 = Number(n)
-      if (!Number.isFinite(v0) || v0 <= 0) return '0 B'
-      const units = ['B', 'KB', 'MB', 'GB', 'TB']
-      let v = v0
-      let i = 0
-      while (v >= 1024 && i < units.length - 1) {
-        v /= 1024
-        i += 1
-      }
-      const text = i === 0 ? String(Math.round(v)) : v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)
-      return text + ' ' + units[i]
-    }
-
-    function fmtSpeed(n) {
-      const v = Number(n)
-      return Number.isFinite(v) && v > 0 ? fmtBytes(v) + '/s' : ''
-    }
-
-    function secs(ms) {
-      const v = Number(ms)
-      return Number.isFinite(v) && v > 0 ? Math.floor(v / 1000) : 0
-    }
-
-    /* ---------------- data ---------------- */
 
     function useTasks(enabled) {
       const [tasks, setTasks] = React.useState([])
@@ -709,56 +746,85 @@ window.__ModuleLoader__.load({
 
     /* ---------------- overlay view ---------------- */
 
-    function describe(task, options) {
-      const showSpeed = !options || options.showSpeed !== false
-      const kind = String(task.kind || '')
-      const bytes = Number(task.bytes) || 0
-      const total = Number(task.total)
-      const speed = Number(task.speed) || 0
-      const hasTotal = Number.isFinite(total) && total > 0
-      const elapsed = secs(task.elapsedMs)
-
-      if (kind === 'download') {
-        const log = String(task.log || '')
-        if (task.unresolved) return { name: '载入中...', meta: elapsed + 's', determinate: false, log }
-        const size = hasTotal ? fmtBytes(bytes) + ' / ' + fmtBytes(total) : fmtBytes(bytes)
-        const sp = showSpeed ? fmtSpeed(speed) : ''
+    /**
+     * Per-kind headline + meta builders.
+     *
+     * Before this table each shape was another `if` block repeating the same
+     * `log: String(task.log || '')` and the same `elapsed + 's'`; adding a shape
+     * meant touching four places. Now a shape is one entry, and anything a
+     * builder does not return falls back to the shared values below.
+     */
+    const VIEWS = {
+      /** Real bytes: size, optional total, optional rate. */
+      download(task, ctx) {
+        if (task.unresolved) return { name: '载入中...', meta: ctx.elapsed + 's' }
+        const size = ctx.hasTotal
+          ? fmtBytes(ctx.bytes) + ' / ' + fmtBytes(ctx.total)
+          : fmtBytes(ctx.bytes)
+        const speed = ctx.showSpeed ? fmtSpeed(ctx.speed) : ''
         return {
           name: task.label || '下载中...',
-          meta: sp ? size + ' · ' + sp : size,
-          determinate: hasTotal,
-          log,
+          meta: speed ? size + ' · ' + speed : size,
         }
-      }
-      if (kind === 'install') {
+      },
+      /** No byte stream at all: phase text plus elapsed time, newest log line. */
+      install(task, ctx) {
         return {
-          name: task.phase === 'applying' ? '插件安装中...应用配置中...' : '插件安装中...下载中...',
-          meta: elapsed + 's',
-          determinate: false,
-          log: String(task.log || ''),
+          name:
+            task.phase === 'applying' ? '插件安装中...应用配置中...' : '插件安装中...下载中...',
+          meta: ctx.elapsed + 's',
         }
+      },
+      /** A single page fetch: only a clock, because nothing is measurable. */
+      fetch(task, ctx) {
+        return { name: '正在抓取网页中...' + ctx.elapsed + 's', meta: '' }
+      },
+      /** A search: the query is the only useful thing to show. */
+      search(task) {
+        return { name: '正在搜索「' + (task.label || '…') + '」中...请稍后', meta: '' }
+      },
+    }
+
+    /** Unknown shape: still show a card, just without a claim about progress. */
+    function fallbackView(task, ctx) {
+      return { name: '载入中...', meta: ctx.elapsed + 's' }
+    }
+
+    /**
+     * Flatten one wire task into everything a card needs.
+     *
+     * Numbers are coerced once, here, so `Card` never re-parses `task.bytes` /
+     * `task.total` and never risks computing a different percentage than the size
+     * readout next to it.
+     *
+     * @param {object} task
+     * @param {{showSpeed?: boolean}} [options]
+     */
+    function describe(task, options) {
+      const ctx = {
+        showSpeed: !options || options.showSpeed !== false,
+        bytes: Number(task.bytes) || 0,
+        total: Number(task.total),
+        speed: Number(task.speed) || 0,
+        elapsed: secs(task.elapsedMs),
       }
-      if (kind === 'fetch') {
-        return {
-          name: '正在抓取网页中...' + elapsed + 's',
-          meta: '',
-          determinate: false,
-          log: String(task.log || ''),
-        }
-      }
-      if (kind === 'search') {
-        return {
-          name: '正在搜索「' + (task.label || '…') + '」中...请稍后',
-          meta: '',
-          determinate: false,
-          log: String(task.log || ''),
-        }
-      }
+      ctx.hasTotal = Number.isFinite(ctx.total) && ctx.total > 0
+
+      const build = VIEWS[task.kind] || fallbackView
+      const { name, meta } = build(task, ctx)
+      // Only downloads have a meaningful fraction; everything else stays
+      // indeterminate even if the host happened to report a total.
+      const percent =
+        task.kind === 'download' && ctx.hasTotal
+          ? clamp((ctx.bytes / ctx.total) * 100, 0, 100)
+          : null
+
       return {
-        name: '载入中...',
-        meta: elapsed + 's',
-        determinate: false,
-        log: String(task.log || ''),
+        name,
+        meta,
+        percent,
+        determinate: percent !== null,
+        log: logOf(task),
       }
     }
 
@@ -769,19 +835,14 @@ window.__ModuleLoader__.load({
     function Card(props) {
       const task = props.task || {}
       const view = describe(task, { showSpeed: props.showSpeed })
-      const total = Number(task.total)
-      const bytes = Number(task.bytes) || 0
-      const percent =
-        view.determinate && Number.isFinite(total) && total > 0
-          ? Math.max(0, Math.min(100, (bytes / total) * 100))
-          : null
+      const percent = view.percent
       const phase = props.phase === 'out' ? 'out' : 'in'
       const delay = phase === 'in' ? Math.max(0, Number(props.index) || 0) * STAGGER_MS : 0
 
       return h(
         'div',
         {
-          className: 'ddp-card ddp-ease-' + props.ease + ' ddp-anim--' + phase,
+          className: cx('ddp-card', 'ddp-ease-' + props.ease, 'ddp-anim--' + phase),
           style: delay ? { animationDelay: delay + 'ms' } : undefined,
         },
         h(
@@ -839,11 +900,13 @@ window.__ModuleLoader__.load({
     function clampInto(x, y, width, height) {
       const vw = (typeof window !== 'undefined' && window.innerWidth) || 1024
       const vh = (typeof window !== 'undefined' && window.innerHeight) || 768
+      // Keep at least 8px of the overlay on screen on every edge, so it can never
+      // be dragged out of reach.
       const maxX = Math.max(8, vw - width - 8)
       const maxY = Math.max(8, vh - height - 8)
       return {
-        x: Math.round(Math.max(8, Math.min(maxX, x))),
-        y: Math.round(Math.max(8, Math.min(maxY, y))),
+        x: Math.round(clamp(x, 8, maxX)),
+        y: Math.round(clamp(y, 8, maxY)),
       }
     }
 
@@ -1029,7 +1092,7 @@ window.__ModuleLoader__.load({
         : h(
             'div',
             {
-              className: 'ddp-handle' + (canPeek ? ' ddp-handle--debug' : ''),
+              className: cx('ddp-handle', canPeek && 'ddp-handle--debug'),
               onPointerDown: beginDrag,
               title: canPeek ? '拖动可调整位置 · 悬停展开示例' : '拖动可调整位置',
             },
@@ -1039,10 +1102,11 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         {
-          className:
-            'ddp-wrap' +
-            (peeking && !hasReal ? ' ddp-wrap--peek' : '') +
-            (drag ? ' ddp-wrap--drag' : ''),
+          className: cx(
+            'ddp-wrap',
+            peeking && !hasReal && 'ddp-wrap--peek',
+            drag && 'ddp-wrap--drag',
+          ),
           'aria-live': 'polite',
           style: position,
           onPointerOver: enter,
@@ -1101,10 +1165,42 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * A labelled <select> row.
+     *
+     * Four settings differ only in their data (value, label, option list, what
+     * they write back), so the markup lives here once instead of being repeated
+     * with copy-pasted `className` / `aria-label` / `onChange` wrappers.
+     *
+     * @param {{label: string, hint?: string, aria: string, value: unknown,
+     *          options: {value: string, label: string}[],
+     *          onChange: (value: string) => void}} props
+     */
+    function selectRow(props) {
+      return h(
+        SettingRow,
+        { label: props.label, hint: props.hint },
+        h(
+          'select',
+          {
+            className: 'ddp-set-select',
+            value: String(props.value),
+            'aria-label': props.aria,
+            onChange: (event) => props.onChange(event.target.value),
+          },
+          props.options.map((option) =>
+            h('option', { key: option.value, value: option.value }, option.label),
+          ),
+        ),
+      )
+    }
+
+    /** Row-count choices for the "max visible cards" setting. */
+    const ROW_COUNTS = [1, 2, 3, 4, 5, 6]
+
     function SettingsPage() {
       const settings = useSettings()
       const set = writeSettings
-      const rowCounts = [1, 2, 3, 4, 5, 6]
 
       return h(
         'div',
@@ -1127,76 +1223,42 @@ window.__ModuleLoader__.load({
           checked: settings.debugMode,
           onChange: (next) => set({ debugMode: next }),
         }),
-        h(
-          SettingRow,
-          {
-            label: '新任务的排列位置',
-            hint: '同时有多个下载时，最新出现的条目放在列表顶部还是底部。',
-          },
-          h(
-            'select',
-            {
-              className: 'ddp-set-select',
-              value: settings.order,
-              'aria-label': '排列顺序',
-              onChange: (event) => set({ order: event.target.value }),
-            },
-            h('option', { value: 'newest-first' }, '最新在前'),
-            h('option', { value: 'oldest-first' }, '最新在后'),
-          ),
-        ),
-        h(
-          SettingRow,
-          {
-            label: '主题',
-            hint: '「跟随系统」直接沿用 DSH 当前主题；亮色/暗色只作用于浮层。新增主题只需在 client.js 的 THEMES 里加一项，这个下拉会自动出现新选项。',
-          },
-          h(
-            'select',
-            {
-              className: 'ddp-set-select',
-              value: settings.theme,
-              'aria-label': '主题',
-              onChange: (event) => set({ theme: event.target.value }),
-            },
-            allThemes().map((theme) =>
-              h('option', { key: theme.id, value: theme.id }, theme.label),
-            ),
-          ),
-        ),
-        h(
-          SettingRow,
-          {
-            label: '出现动画',
-            hint: '浮层出现 / 收起时的动效。「CRT 开关机」是从一条亮线展开、收起时再缩成亮线消失；「无动画」则瞬间出现。',
-          },
-          h(
-            'select',
-            {
-              className: 'ddp-set-select',
-              value: settings.enterAnim,
-              'aria-label': '出现动画',
-              onChange: (event) => set({ enterAnim: event.target.value }),
-            },
-            ENTER_ANIMS.map((anim) =>
-              h('option', { key: anim.id, value: anim.id }, anim.label),
-            ),
-          ),
-        ),
-        h(
-          SettingRow,
-          { label: '最多同时显示条数', hint: '超出的条目在浮层内滚动查看。' },
-          h(
-            'select',
-            {
-              className: 'ddp-set-select',
-              value: String(settings.maxVisible),
-              'aria-label': '最多同时显示条数',
-              onChange: (event) => set({ maxVisible: Number(event.target.value) }),
-            },
-            rowCounts.map((n) => h('option', { key: String(n), value: String(n) }, String(n) + ' 条')),
-          ),
-        ),
+        selectRow({
+          label: '新任务的排列位置',
+          hint: '同时有多个下载时，最新出现的条目放在列表顶部还是底部。',
+          aria: '排列顺序',
+          value: settings.order,
+          options: [
+            { value: 'newest-first', label: '最新在前' },
+            { value: 'oldest-first', label: '最新在后' },
+          ],
+          onChange: (value) => set({ order: value }),
+        }),
+        selectRow({
+          label: '主题',
+          hint: '「跟随系统」直接沿用 DSH 当前主题；亮色/暗色只作用于浮层。新增主题只需在 client.js 的 THEMES 里加一项，这个下拉会自动出现新选项。',
+          aria: '主题',
+          value: settings.theme,
+          options: allThemes().map((theme) => ({ value: theme.id, label: theme.label })),
+          onChange: (value) => set({ theme: value }),
+        }),
+        selectRow({
+          label: '出现动画',
+          hint: '浮层出现 / 收起时的动效。「CRT 开关机」是从一条亮线展开、收起时再缩成亮线消失；「水波纹」是从卡片中心涌出一圈光；「无动画」则瞬间出现。',
+          aria: '出现动画',
+          value: settings.enterAnim,
+          options: ENTER_ANIMS.map((anim) => ({ value: anim.id, label: anim.label })),
+          onChange: (value) => set({ enterAnim: value }),
+        }),
+        selectRow({
+          label: '最多同时显示条数',
+          hint: '超出的条目在浮层内滚动查看。',
+          aria: '最多同时显示条数',
+          value: settings.maxVisible,
+          options: ROW_COUNTS.map((n) => ({ value: String(n), label: n + ' 条' })),
+          // The select yields a string; the setting is a number.
+          onChange: (value) => set({ maxVisible: Number(value) }),
+        }),
         h(
           SettingRow,
           {
