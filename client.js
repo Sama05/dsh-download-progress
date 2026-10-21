@@ -22,6 +22,15 @@ window.__ModuleLoader__.load({
 
     const ROUTE = '/download-progress/state'
     const POLL_MS = 1000
+    /**
+     * Consecutive failed polls before the last frame is dropped.
+     *
+     * A host that is restarting (or a route that briefly 502s) should not blank the
+     * overlay — the download is still running. A host that has been gone for five
+     * seconds is not coming back in this second, and a frozen bar that never moves
+     * again is worse than no bar.
+     */
+    const POLL_FAILURES_BEFORE_CLEAR = 5
 
     /* ---------------- styles (the one place UI is defined) ---------------- */
 
@@ -749,17 +758,26 @@ window.__ModuleLoader__.load({
           return undefined
         }
         let alive = true
+        let failures = 0
         const tick = () => {
           if (!alive) return
           if (typeof document !== 'undefined' && document.hidden) return
           fetch(stateUrl(), { cache: 'no-store' })
             .then((res) => (res && res.ok ? res.json() : null))
             .then((data) => {
-              if (!alive || !data) return
+              if (!alive) return
+              if (!data) {
+                // Missing/!ok response: keep the last frame through a short blip,
+                // drop it once the host is clearly gone.
+                if (++failures >= POLL_FAILURES_BEFORE_CLEAR) setTasks([])
+                return
+              }
+              failures = 0
               setTasks(Array.isArray(data.tasks) ? data.tasks : [])
             })
             .catch(() => {
               /* the host route is optional: stay silent when it is absent */
+              if (alive && ++failures >= POLL_FAILURES_BEFORE_CLEAR) setTasks([])
             })
         }
         tick()
@@ -988,7 +1006,9 @@ window.__ModuleLoader__.load({
       // Peeking = the pointer is on the handle / the expanded list. Only allowed
       // when nothing real is in flight, so samples can never sit next to real rows.
       const [peeking, setPeeking] = React.useState(() => peekState.on)
-      const hasReal = liveTasks.length > 0
+      // Only a well-formed row counts as a real download. An array of nulls must
+      // not suppress the sample cards and then paint an empty overlay.
+      const hasReal = liveTasks.some((task) => task && typeof task === 'object')
       // Sample cards exist only as a UI workbench. With debug mode off the overlay
       // shows nothing but real downloads, so a placeholder can never be mistaken
       // for an actual transfer.
@@ -1116,8 +1136,15 @@ window.__ModuleLoader__.load({
       // While the exit animation runs the list is already empty, so the last
       // populated frame is what actually animates out.
       const held = React.useState(() => ({ list: [] }))[0]
-      if (tasks.length) held.list = tasks
-      const shown = tasks.length ? tasks : held.list
+      // The route body is JSON from another process. A null or non-object entry
+      // must be dropped here: `Card` and the React key both read `task.id`, and a
+      // throw inside a slot unmounts the entire overlay — one bad row would take
+      // the whole thing down instead of costing one card.
+      const safeTasks = (Array.isArray(tasks) ? tasks : []).filter(
+        (task) => task && typeof task === 'object',
+      )
+      if (safeTasks.length) held.list = safeTasks
+      const shown = safeTasks.length ? safeTasks : held.list
 
       // Horizontal placement. While dragging, the raw pixel offset is used so
       // the card tracks the pointer exactly; once dropped, the stored percentage

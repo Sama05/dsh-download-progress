@@ -60,22 +60,32 @@ export function apply(ctx) {
   // Around-dispatch observation. This listener owns no decision: it either does
   // not recognise the call and hands it straight back, or it records a task and
   // still hands it back unchanged.
+  //
+  // Every step that could throw — classifying, resolving the cwd, registering the
+  // task — is wrapped, and each failure path still calls `next()`. A bookkeeping
+  // plugin that can break the tool call it is only supposed to watch would be a
+  // worse bug than never showing a bar at all.
   ctx.on('tools/execute', async (exec, next) => {
-    let plan = null
+    let task = null
     try {
-      plan = classify(exec)
+      const plan = classify(exec)
+      if (!plan) return await next()
+      task = beginTask(exec, plan, await resolveCwd(ctx, exec))
     } catch {
-      plan = null
+      return next()
     }
-    if (!plan) return next()
 
-    const task = beginTask(exec, plan, await resolveCwd(ctx, exec))
     try {
       return await next()
     } finally {
       // The tool returned, but the task stays on screen until its file stops
       // growing — see sweep(). That is what keeps background downloads visible.
-      task.done = true
+      // A failure here must not mask the tool's own result or error.
+      try {
+        task.done = true
+      } catch {
+        /* the task object is ours; this cannot fail in practice */
+      }
     }
   })
 

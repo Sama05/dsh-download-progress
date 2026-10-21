@@ -57,6 +57,15 @@ export const PKG_RE =
   /\b(pnpm\s+(?:add|i|install)|npm\s+(?:i|install|add)|yarn\s+add|pip\s+install|uv\s+(?:add|pip)|docker\s+pull|ollama\s+pull)\b/i
 
 /**
+ * How much of a command line is worth scanning.
+ *
+ * Agents sometimes inline whole files into `pwsh -Command "..."`. Every pattern
+ * here is anchored near the start, so the tail is pure cost: a large regex pass
+ * on the host main thread, once per dispatch, on data that cannot match.
+ */
+const MAX_SCAN_CHARS = 20000
+
+/**
  * `curl -o <path>` / `--output <path>` / `--output-document <path>`.
  * Lowercase `-o` only: uppercase `-O` means "name it after the URL", which is
  * handled separately.
@@ -102,6 +111,10 @@ function flagValues(command, pattern) {
 export function extractTargets(command, cwd) {
   const out = []
   const base = cwd || process.cwd()
+  // Tolerate a missing command line rather than throwing inside a tool dispatch:
+  // this runs from a waterfall listener, where a throw would fail the very tool
+  // call the plugin is only observing.
+  const source = String(command ?? '')
 
   /** Accept only something that looks like a path, then make it absolute. */
   const push = (raw) => {
@@ -111,13 +124,13 @@ export function extractTargets(command, cwd) {
     out.push(isAbsolute(clean) ? clean : resolve(base, clean))
   }
 
-  for (const value of flagValues(command, CURL_OUTFILE_RE)) push(value)
-  for (const value of flagValues(command, PS_OUTFILE_ARG_RE)) push(value)
+  for (const value of flagValues(source, CURL_OUTFILE_RE)) push(value)
+  for (const value of flagValues(source, PS_OUTFILE_ARG_RE)) push(value)
 
   // `-O` takes the name from the URL, which is the only way to know the target
   // before the transfer starts.
-  if (CURL_REMOTE_NAME_RE.test(command)) {
-    const url = extractUrl(command)
+  if (CURL_REMOTE_NAME_RE.test(source)) {
+    const url = extractUrl(source)
     if (url) {
       try {
         push(basename(new URL(url).pathname))
@@ -127,12 +140,37 @@ export function extractTargets(command, cwd) {
     }
   }
 
-  // `git clone <url> <dir>`: the directory is the second positional argument.
-  if (GIT_CLONE_RE.test(command)) {
-    const fromClone = command.slice(command.search(GIT_CLONE_RE))
-    const positional = fromClone.split(/\s+/).filter(Boolean).slice(2)
-    const dir = positional.filter((token) => !token.startsWith('-'))[1]
+  // `git clone [flags] <repo> [dir]`: the local directory is the first positional
+  // argument AFTER the repository. Taking "the last non-flag token" is wrong for
+  // `--depth 1` — the flag's own value sits in the token stream and would be read
+  // as the directory. Anchoring on the repository instead makes the flag order
+  // irrelevant.
+  if (GIT_CLONE_RE.test(source)) {
+    const fromClone = source.slice(source.search(GIT_CLONE_RE))
+    const tokens = fromClone.split(/\s+/).filter(Boolean).slice(2)
+    const isRepo = (token) =>
+      /^[a-z][a-z0-9+.-]*:\/\//i.test(token) || /^[\w.-]+@[\w.-]+:/.test(token)
+    const repoAt = tokens.findIndex(isRepo)
+    let dir = ''
+    if (repoAt >= 0) {
+      dir = tokens.slice(repoAt + 1).find((token) => !token.startsWith('-')) || ''
+    } else {
+      // scp-style remote without a scheme: the repo is the first positional.
+      const positional = tokens.filter((token) => !token.startsWith('-'))
+      dir = positional[1] || ''
+    }
     if (dir) push(dir)
+    else {
+      // No directory given: git names it after the repository.
+      const url = extractUrl(fromClone)
+      if (url) {
+        try {
+          push(basename(new URL(url).pathname).replace(/\.git$/, ''))
+        } catch {
+          /* malformed URL: nothing to resolve */
+        }
+      }
+    }
   }
 
   return uniq(out)
@@ -183,13 +221,19 @@ export function classify(exec) {
   const command = String(args.command ?? args.text ?? '')
   if (!command) return null
 
+  // An agent can inline an entire file into `pwsh -Command "..."`. The command
+  // patterns below are all anchored near the start, so scanning past this point
+  // buys nothing and costs the host main thread a full regex pass per tick.
+  const scan =
+    command.length > MAX_SCAN_CHARS ? command.slice(0, MAX_SCAN_CHARS) : command
+
   // Invoke-WebRequest WITHOUT -OutFile buffers the page in memory: there is no
   // file to sample, so it must not be mistaken for a download.
-  const writesFile = IWR_RE.test(command) && PS_OUTFILE_RE.test(command)
-  if (CURL_WGET_RE.test(command) || GIT_CLONE_RE.test(command) || writesFile) {
+  const writesFile = IWR_RE.test(scan) && PS_OUTFILE_RE.test(scan)
+  if (CURL_WGET_RE.test(scan) || GIT_CLONE_RE.test(scan) || writesFile) {
     return { kind: 'download', command }
   }
-  if (PKG_RE.test(command)) return { kind: 'pkg', command }
+  if (PKG_RE.test(scan)) return { kind: 'pkg', command }
 
   return null
 }

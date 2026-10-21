@@ -26,6 +26,26 @@ const SPEED_WINDOW = 6
 /** Minimum span before a rate is computed, so the first tick is not wild. */
 const MIN_SPEED_SPAN_MS = 900
 
+/**
+ * Grace period before a not-yet-existing target counts as idle.
+ *
+ * A downloader spends its first moments resolving DNS and opening the socket,
+ * and some write under a temporary name. Counting those ticks as idle retires a
+ * `run_in_background` card before the file ever appears — and once retired the
+ * card cannot come back, because the tool call it was tied to is already over.
+ */
+const START_GRACE_MS = 5000
+
+/**
+ * Hard ceiling on a card's lifetime, independent of progress.
+ *
+ * `done` alone is not enough to retire a download: a background job that dies
+ * without ever creating its file, or one whose path was parsed wrong, would keep
+ * counting quiet ticks against a file that never appears. Thirty minutes is far
+ * past any transfer worth watching.
+ */
+const MAX_TASK_MS = 30 * 60 * 1000
+
 /** @type {Map<string, object>} */
 const tasks = new Map()
 
@@ -134,16 +154,25 @@ function sample(task, now) {
   if (task.kind !== 'download' || task.targets.length === 0) return
 
   let size = 0
+  let seen = false
   for (const target of task.targets) {
     try {
       size += statSync(target).size
+      seen = true
     } catch {
       /* the file may not exist yet, or was already renamed away */
     }
   }
 
+  if (!seen && now - task.startedAt < START_GRACE_MS) return
+
   task.idleTicks = size > task.bytes ? 0 : task.idleTicks + 1
-  task.bytes = size
+  // Hold the high-water mark instead of following the file down. A downloader
+  // that writes to a temporary name and renames it into place makes the sampled
+  // path vanish for a tick, and reporting 0 B would snap the bar back to empty
+  // right before the card is retired. Quiet ticks are still counted off `size`,
+  // so the card does retire on schedule.
+  if (size >= task.bytes) task.bytes = size
 
   task.history.push({ t: now, s: size })
   while (task.history.length > SPEED_WINDOW) task.history.shift()
@@ -167,6 +196,12 @@ function sample(task, now) {
  */
 export function sweep(now) {
   for (const [id, task] of tasks) {
+    // Retire a card that has outlived its usefulness even if it never settles.
+    if (now - task.startedAt > MAX_TASK_MS) {
+      tasks.delete(id)
+      continue
+    }
+
     sample(task, now)
 
     const quiet =
