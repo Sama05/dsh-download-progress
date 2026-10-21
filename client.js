@@ -268,7 +268,9 @@ window.__ModuleLoader__.load({
 .ddp-log{
   margin-top:4px;font-size:11px;
   color:var(--ddp-fg-dim,var(--dsw-alias-label-secondary,#a8a8b0));
-  opacity:.55;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  /* .55 looked right over an opaque plate; once the card became real glass the
+     line sat on whatever was behind it and stopped being readable. */
+  opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
 
 /* ---- settings page ---- */
@@ -419,7 +421,7 @@ window.__ModuleLoader__.load({
         '--ddp-accent': '#2f7fe0',
         '--ddp-grip': '#8b8b95',
         '--ddp-fg': '#1b1b1f',
-        '--ddp-fg-dim': '#5f5f68',
+        '--ddp-fg-dim': '#494951',
         // Frosted glass wants a light tint, not an opaque plate: the blur behind
         // it supplies the rest of the material. Held low on purpose — at .66 this
         // read as a white card with a blurry feel, not as glass over the page.
