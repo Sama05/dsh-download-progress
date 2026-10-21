@@ -11,8 +11,9 @@
 import fs from 'node:fs'
 import vm from 'node:vm'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const file = path.resolve('D:/AIworks/dsh-download-progress/client.js')
+const file = path.join(path.dirname(fileURLToPath(import.meta.url)), 'client.js')
 const src = fs.readFileSync(file, 'utf8')
 
 /* ---- fake page globals ---- */
@@ -38,7 +39,7 @@ function flushTimers() {
 }
 
 const fakeWindow = {
-  location: { origin: 'http://127.0.0.1:60854' },
+  location: { origin: 'http://localhost:41999' },
   innerWidth: 1440,
   innerHeight: 900,
   localStorage: {
