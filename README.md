@@ -62,7 +62,15 @@ DSH 原生只在工具**开始**和**结束**时给你两个瞬间，中间是�
 
 ## 安装
 
-DSH 插件以 bundle 形式安装。把本仓库放到任意目录，然后让 DSH 安装它：
+DSH 插件以 bundle 形式安装。两种方式任选：
+
+**直接从 GitHub 装**（不需要 clone）：
+
+```bash
+dsh plugin --profile web add github:Sama05/dsh-download-progress
+```
+
+**从本地目录装**（改代码时用这个，改完即时生效）：
 
 ```text
 plugin_manager action=install_bundle target="<本仓库的绝对路径>"
@@ -84,8 +92,8 @@ plugin_manager action=remove_bundle target="@local/dsh-download-progress"
 1. 「设置 → 插件」里能看到「下载进度条」这一页（说明 Client 半挂载成功）；
 2. 让 agent 执行一次 `curl -o <文件> <某个大文件 URL>`，浮层会出现在窗口上方。
 
-改包名的话记得**两个地方一起改**：`package.json` 的 `name` 与 `cordis.patch.yml` 里的
-`name`，两者必须一致，否则 bundle 挂载不到。
+改包名的话记得**三个地方一起改**，缺一处插件就挂载不上：`package.json` 的 `name`、
+`cordis.patch.yml` 里的 `name`、以及 `client.js` 顶部 `__ModuleLoader__.load({ id: ... })` 的 `id`。
 
 配置在「设置 → 插件 → 下载进度条」里，无需改任何文件。
 
@@ -144,7 +152,7 @@ plugin_manager action=remove_bundle target="@local/dsh-download-progress"
 - **零依赖**：不会因为上游包升级而断，也不需要联网安装。
 - **UI 与逻辑分离**：所有样式集中在 `client.js` 顶部的 `CSS` 常量里，改外观不用碰逻辑；主题是一组 CSS 变量，加主题不改代码。
 - **不抖**：固定在布局流之外，出现、收起、悬停展开都不会让窗口元素位移。
-- **可离线测试**：`smoke.mjs` / `smoke-host.mjs` 不需要浏览器、不需要启动 DSH 就能回归 40+ 条断言。
+- **可离线测试**：四个 `smoke*` / `stress*` 脚本不需要浏览器、不需要启动 DSH，合计 70+ 条断言，覆盖 30 并发与脏数据。
 - **可扩展主题**：内置跟随系统 / 亮色 / 暗色，也支持从 `localStorage` 加载自定义主题（写几个 `--ddp-*` 变量即可）。
 
 ---
@@ -182,11 +190,13 @@ plugin_manager action=remove_bundle target="@local/dsh-download-progress"
 ## 开发与测试
 
 ```bash
-node smoke.mjs        # Client 半：假 window + 假 React，渲染真实组件树
-node smoke-host.mjs   # Host 半：假 fs，断言分类、解析、采样、回收
+node smoke.mjs         # Client 半：假 window + 假 React，渲染真实组件树
+node smoke-host.mjs    # Host 半：断言分类、解析、采样、回收
+node stress-client.mjs # Client 压力测试：50 张卡、脏数据、路由挂掉、窄窗口
+node stress-host.mjs   # Host 压力测试：30 并发、10 KB 命令、畸形入参、寿命上限
 ```
 
-两个脚本都不需要浏览器或 DSH 进程，改完代码跑一遍即可确认没有改崩。
+四个脚本都不需要浏览器或 DSH 进程，改完代码跑一遍即可确认没有改崩。
 实现细节（为什么这么设计、依赖哪些 DSH 内部契约、哪些路子走不通）见 [NOTES-FOR-AI.md](NOTES-FOR-AI.md)。
 
 ---

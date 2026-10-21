@@ -481,8 +481,54 @@ prerelease 参与比较，`0.2.1-rc.2` 通过。
 `node smoke.mjs` / `node smoke-host.mjs` / `import('./index.js')`，全部通过。
 说明代码不依赖本仓库所在位置。
 
-**唯一需要注意的耦合**：改包名时要同时改 `package.json` 的 `name` 与
-`cordis.patch.yml` 的 `name`，两者不一致会导致 bundle 挂载不上。
+**唯一需要注意的耦合**：改包名时要同时改三处——`package.json` 的 `name`、
+`cordis.patch.yml` 的 `name`、以及 `client.js` 顶部
+`window.__ModuleLoader__.load({ id: ... })` 的 `id`。前两者不一致会导致 bundle
+挂载不上；第三处不一致会让客户端半注册到错误的模块 id 下，页面里静默不出现。
+
+---
+
+### 5.7 压测抓出的四个真 bug（都是上架前才暴露的）
+
+用户要求「先把 bug 都测完，避免上架后还有 bug」，于是先写两个压力脚本
+（`stress-host.mjs` / `stress-client.mjs`）再上真机 10 并发。下面四条都是
+实测复现过的，不是假想问题。
+
+**① 任务寿命上限（真死锁）**
+`sample()` 只在「文件变大了」时重置 `idleTicks`。若下载工具持续
+`SetLastWriteTime` 却不写数据，或路径被解析成一个永不出现的文件，任务永远
+不回收，卡片永久挂在窗口上。修法：`MAX_TASK_MS = 30 * 60 * 1000`，在
+`sweep()` 里先于采样判一次硬上限。
+
+**② 文件消失导致进度条倒退**
+下载器「写临时名再改名」时，被采样的路径会消失一个 tick，`statSync` 抛错。
+若直接按 0 计算，进度条会在卡片退休前一刻弹回空。修法：`task.bytes` 只涨不跌
+（`if (size >= task.bytes) task.bytes = size`），而空闲计数仍按真实 `size` 走，
+所以退休时机不受影响（`stress-host.mjs` 有断言覆盖）。
+
+**③ 命令长度无上限**
+Agent 会把整个文件塞进 `pwsh -Command "..."`。`classify()` 对十万字符做五条
+正则扫描，在 host 主进程上每 dispatch 一次就阻塞一次。修法：`MAX_SCAN_CHARS =
+20000`，`classify()` 只在前 2 万字符上匹配特征——所有模式都锚定在命令开头，
+截断不损失识别率（返回值里的 `command` 仍是完整原文，供日志行使用）。
+
+**④ 起始宽限：文件还没创建就被判空闲**
+`run_in_background` 的 `tools/execute` 会**立刻** resolve，此时 curl 可能还在
+DNS / TLS 握手，文件尚不存在。首个 tick 读到 0 字节就累加 `idleTicks`，3 秒后
+卡片退休——而退休后不会再有第二次机会，因为工具调用已经结束了。修法：
+`START_GRACE_MS = 5000`，目标文件不存在且未超过宽限期时直接 `return`，不累加
+空闲计数。
+
+三条修法都有断言：`stress-host.mjs` 里分别是 `30 minute ceiling`、
+`vanished file keeps its last size`、`not-yet-created target gets a start grace`。
+
+客户端侧另有一处容错（不是 bug 修复，是设计）：`POLL_FAILURES_BEFORE_CLEAR`
+允许连续多次轮询失败才清空列表，避免宿主重启、路由短暂 502 时浮层闪一下消失。
+`cache: 'no-store'` 已足够，实测没有出现 304 语义问题。
+
+真机 10 并发验证（每路 `curl --limit-rate 150k --max-time 12`，字面量 `-o` 路径）：
+10 张卡片同时出现、各自独立算速度、`done` 为真但文件仍在增长时继续显示，
+全部中断后 3 tick + `LINGER_MS` 内清空，无残留文件句柄占盘。
 
 ---
 
