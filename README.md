@@ -155,7 +155,7 @@ node smoke-host.mjs   # Host 半：假 fs，断言分类、解析、采样、回
 ```
 
 两个脚本都不需要浏览器或 DSH 进程，改完代码跑一遍即可确认没有改崩。
-实现细节（为什么这么设计、依赖哪些 DSH 内部契约、哪些路子走不通）见 [AGENTS.md](AGENTS.md)。
+实现细节（为什么这么设计、依赖哪些 DSH 内部契约、哪些路子走不通）见 [NOTES-FOR-AI.md](NOTES-FOR-AI.md)。
 
 ---
 

@@ -503,6 +503,7 @@ node smoke-host.mjs
 | `client.js` | Client 半：`CSS` + `describe()` + `Card` + `Overlay` + 设置页 |
 | `smoke.mjs` | 离线冒烟测试（假 window + 假 React，不需要浏览器） |
 | `smoke-host.mjs` | Host 半离线测试（假 `fs`，不需要启动 DSH） |
+| `NOTES-FOR-AI.md` | 本文档：实现笔记。刻意不叫 `AGENTS.md`，避免被 DSH 当项目指令每轮自动注入（约 11K token） |
 | `locale/en.json` / `locale/zh.json` | 插件元数据标题（插件列表里显示的名字） |
 | `icon.svg` | 插件图标 |
 | `LICENSE` | MIT 许可证 |
