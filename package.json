@@ -2,6 +2,14 @@
   "name": "@local/dsh-download-progress",
   "version": "0.1.0",
   "private": true,
+  "description": "Frosted-glass download progress overlay for DeepSeek Harness (DSH)",
+  "license": "MIT",
+  "author": "Sama05",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sama05/dsh-download-progress.git"
+  },
+  "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "progress"],
   "type": "module",
   "exports": {
     ".": "./index.js",

@@ -1,11 +1,15 @@
 # dsh-download-progress
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![AI-assisted](https://img.shields.io/badge/AI--assisted-DeepSeek-6e6ef7.svg)](#8-ai-开发声明)
+
 在 DSH 执行任务的过程中，一旦 agent 开始下载/加载某个东西，窗口下方自动浮出一条进度条。
 
 - 包名：`@local/dsh-download-progress`
 - 版本：`0.1.0`
 - 安装位置：desktop profile（`C:\Users\Sama05\.dsh\profiles\desktop`），以链接方式指向本目录
 - 零外部依赖：只用 `node:fs` / `node:path`（Host 半）+ `react`（Client 半，由宿主提供）
+- 许可证：MIT，见 [LICENSE](LICENSE)
 
 ---
 
@@ -483,3 +487,23 @@ node smoke.mjs
 | `smoke.mjs` | 离线冒烟测试（假 window + 假 React，不需要浏览器） |
 | `locale/en.json` / `locale/zh.json` | 插件元数据标题（插件列表里显示的名字） |
 | `icon.svg` | 插件图标 |
+| `LICENSE` | MIT 许可证 |
+| `.gitignore` | 忽略 `node_modules/`、测试下载残留（`*.bin`、`*.log`） |
+
+---
+
+## 8. AI 开发声明
+
+本插件是 **AI 辅助开发（AI-assisted）** 的产物，请在使用、分发或二次开发时保留本声明。
+
+| 项 | 说明 |
+| --- | --- |
+| 实现方式 | 由 DeepSeek 模型（`deepseek-v4.1-flash`）在 DeepSeek Harness（DSH）内部以 agent 会话方式完成需求分析、源码探查、编码与验证 |
+| 人类角色 | 提出需求、验收效果、决定设计取舍（进度条位置、动画类型、主题方案等） |
+| 验证方式 | 代码侧由 `smoke.mjs` 离线断言覆盖；运行时行为通过真实下载任务 + DSH 状态路由实测 |
+| 未覆盖部分 | 视觉观感（模糊强度、动画流畅度、颜色对比）由人类目视验收 —— 模型无法读取屏幕截图 |
+
+之所以单列这一节，是因为这个插件的**触发机制来自对 DSH 宿主源码的逐层确认**（哪些扩展点可用、哪些事件根本不存在），
+结论写在第 1 节里供后来者复用；如果发现与新版本 DSH 不符，优先怀疑版本漂移而不是代码写错。
+
+本声明不改变 [LICENSE](LICENSE) 的授权条款 —— 代码仍是 MIT，可自由使用与修改，只请求保留出处与本节说明。
