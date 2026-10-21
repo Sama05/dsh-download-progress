@@ -128,6 +128,10 @@ const React = {
     const dispose = fn()
     if (typeof dispose === 'function') cleanups.push(dispose)
   },
+  useRef(init) {
+    React.__hooks += 1
+    return { current: init === undefined ? null : init }
+  },
 }
 const cleanups = []
 const fakeRequire = (name) => {
@@ -557,11 +561,34 @@ const dragged = JSON.parse(storage.get('dsh-download-progress:settings'))
 console.log('\ndragged grip 40px down -> stored', JSON.stringify(dragged))
 if (dragged.y !== 116)
   throw new Error('dragging the grip must move the wrapper by 40px (76+40=116), got ' + dragged.y)
-if (dragged.x !== 680)
-  throw new Error('dragging must keep the wrapper at its measured left edge, got ' + dragged.x)
-console.log('  ok grip drag moves the wrapper (no 12px creep)')
+// The drop position is converted to the centre as a percentage of the viewport
+// (left 680 + width 560 / 2 = 960 of 1440 = 66.67%), so a later window resize
+// keeps the card at the same relative spot.
+if (dragged.x !== 66.67)
+  throw new Error('drag must store the centre as a percentage (66.67), got ' + dragged.x)
+console.log('  ok grip drag moves the wrapper (no 12px creep) and stores a percentage')
 
+/* ---- the drop position renders as a percentage, so a resize keeps it ---- */
+const afterDrag = renderOverlay()
+const wrapAfterDrag = findByClass(afterDrag, 'ddp-wrap')[0]
+if (!wrapAfterDrag) throw new Error('the overlay wrapper should still exist after a drag')
+const dragStyle = wrapAfterDrag.props.style
+console.log('\nafter drop: left =', dragStyle.left, '| transform =', dragStyle.transform)
+if (dragStyle.left !== '66.67%')
+  throw new Error('the stored percentage must drive left (66.67%), got ' + dragStyle.left)
+if (dragStyle.transform !== 'translateX(-50%)')
+  throw new Error('a percentage left must pair with translateX(-50%) so the CENTRE lands there')
+console.log('  ok dropped position renders as a viewport percentage')
 
+/* ---- a live resize drops the backdrop blur (the expensive half) ---- */
+if (!(listeners.resize || []).length)
+  throw new Error('the overlay must listen for window resize: stale pixels + per-frame re-blur')
+for (const fn of listeners.resize) fn({})
+if (src.indexOf('.ddp-wrap--resizing .ddp-card') < 0)
+  throw new Error('resize must switch the glass off: .ddp-wrap--resizing .ddp-card rule is missing')
+console.log('  ok resize handler registered and drops the glass while resizing')
+
+/* ---- normalisation drops unknown keys and clamps the row cap ---- */
 const store = fakeWindow.localStorage
 store.setItem('dsh-download-progress:settings', JSON.stringify({ maxVisible: 9, position: 'nope' }))
 const reread = JSON.parse(store.getItem('dsh-download-progress:settings'))

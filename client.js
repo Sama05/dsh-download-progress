@@ -178,6 +178,13 @@ window.__ModuleLoader__.load({
   backdrop-filter:var(--ddp-glass,blur(26px) saturate(185%));
   transition:box-shadow .18s ease,transform .18s ease;
 }
+/* While the window edge is being dragged the cards would re-blur a large
+   backdrop every frame, which is the expensive half of a live resize. The blur
+   returns on its own a moment after the gesture stops; nothing else changes. */
+.ddp-wrap--resizing .ddp-card{
+  -webkit-backdrop-filter:none;
+  backdrop-filter:none;
+}
 /* A whisper of a vertical sheen: glass catches a little more light at its top
    edge. Linear only — no radial hotspot. */
 .ddp-card::before{
@@ -378,8 +385,9 @@ window.__ModuleLoader__.load({
       debugMode: false,
       theme: 'auto',
       enterAnim: 'float',
-      // null x means "horizontally centred"; a number is a viewport pixel offset
-      // written by dragging.
+      // null x means "horizontally centred"; a number is a percentage of the
+      // viewport width, written by dragging, so a later window resize keeps the
+      // card at the same relative spot instead of stranding it.
       x: null,
       y: DEFAULT_Y,
     }
@@ -533,7 +541,27 @@ window.__ModuleLoader__.load({
     function coord(value, fallback) {
       const n = Number(value)
       return Number.isFinite(n) && n >= 0 ? Math.round(n) : fallback
-    }    function normalize(input) {
+    }
+
+    /**
+     * Horizontal position, stored as a percentage of the viewport width.
+     *
+     * A pixel offset would be frozen at the window size it was dragged in, so
+     * resizing the DSH window would leave the overlay stranded off-centre. A
+     * percentage is resolved by the browser on every layout, which keeps the
+     * card at the same relative spot and costs nothing at runtime.
+     *
+     * `null` means "centred". Anything outside 0..100 is rejected — that also
+     * migrates values written by older versions, which stored raw pixels.
+     */
+    function percent(value) {
+      if (value === null || value === undefined) return null
+      const n = Number(value)
+      if (!Number.isFinite(n) || n < 0 || n > 100) return null
+      return Math.round(n * 100) / 100
+    }
+
+    function normalize(input) {
       const src = input && typeof input === 'object' ? input : {}
       const rows = Math.round(Number(src.maxVisible))
       return {
@@ -547,7 +575,7 @@ window.__ModuleLoader__.load({
         theme: themeExists(src.theme) ? src.theme : DEFAULTS.theme,
         enterAnim:
           ENTER_ANIM_IDS.indexOf(src.enterAnim) >= 0 ? src.enterAnim : DEFAULTS.enterAnim,
-        x: src.x === null || src.x === undefined ? null : coord(src.x, null),
+        x: percent(src.x),
         y: coord(src.y, DEFAULT_Y),
       }
     }
@@ -596,8 +624,8 @@ window.__ModuleLoader__.load({
     // replaces the samples entirely.
     const FAKE_KINDS = ['download', 'install', 'fetch', 'search', 'pkg']
 
-    /** Sample cards tick faster than real data: they are a visual, not a poll. */
-    const SAMPLE_TICK_MS = 500
+    /** Sample cards tick slower than real data: it is a still image, not a poll. */
+    const SAMPLE_TICK_MS = 1000
 
     const FAKE_TOTAL = 29674910
     const FAKE_RATE = 3.4 * 1024 * 1024
@@ -904,9 +932,15 @@ window.__ModuleLoader__.load({
       // be dragged out of reach.
       const maxX = Math.max(8, vw - width - 8)
       const maxY = Math.max(8, vh - height - 8)
+      const left = clamp(x, 8, maxX)
+      const top = clamp(y, 8, maxY)
       return {
-        x: Math.round(clamp(x, 8, maxX)),
-        y: Math.round(clamp(y, 8, maxY)),
+        x: Math.round(left),
+        y: Math.round(top),
+        // Where the card's CENTRE sits, as a percentage of the viewport. This is
+        // what gets persisted: the renderer resolves it against the live window
+        // size, so resizing keeps the relative position with no JS involved.
+        pct: Math.round(((left + width / 2) / vw) * 10000) / 100,
       }
     }
 
@@ -926,6 +960,12 @@ window.__ModuleLoader__.load({
     // the cards flash. Keep the peek alive for a short grace period and cancel it
     // as soon as the pointer is back over the grip or the cards.
     const LEAVE_GRACE_MS = 180
+
+    // While the window is being resized the cards would re-blur a large backdrop
+    // on every frame. Dropping the filter for the duration of the gesture (and a
+    // short tail after it) keeps a live resize responsive; the blur comes back
+    // once the pointer stops moving the window edge.
+    const RESIZE_IDLE_MS = 200
     let leaveTimer = 0
 
     function cancelLeave() {
@@ -973,6 +1013,10 @@ window.__ModuleLoader__.load({
       }, [canPeek])
 
       const [drag, setDrag] = React.useState(null)
+      // Needed on resize: the clamp limit depends on how wide the card actually
+      // is, which only the DOM knows.
+      const wrapRef = React.useRef(null)
+      const [resizing, setResizing] = React.useState(false)
 
       React.useEffect(() => {
         if (typeof window === 'undefined' || !window.addEventListener) return undefined
@@ -1001,17 +1045,60 @@ window.__ModuleLoader__.load({
           const session = dragSession
           dragSession = null
           if (session && session.moved && session.last) {
-            writeSettings({ x: session.last.x, y: session.last.y })
+            // Persist the centre as a percentage: the drop position is a pixel
+            // offset, but only the ratio survives a window resize.
+            writeSettings({ x: session.last.pct, y: session.last.y })
           }
           setDrag(null)
         }
+
+        // A live window resize does two things that matter here: every card
+        // re-blurs a large backdrop per frame (expensive), and a card dragged
+        // toward an edge can end up half outside a narrower window. One
+        // rAF-throttled handler deals with both.
+        let raf = 0
+        let idleTimer = 0
+        const applyResize = () => {
+          raf = 0
+          setResizing(true)
+          const stored = readSettings().x
+          if (stored === null) return
+          const el = wrapRef.current
+          if (!el || typeof el.getBoundingClientRect !== 'function') return
+          const width = el.getBoundingClientRect().width
+          const vw = (typeof window !== 'undefined' && window.innerWidth) || 1024
+          // The card still fits while its centre stays half a card plus the
+          // 8px edge padding away from both sides.
+          const margin = ((width / 2 + 8) / vw) * 100
+          const low = Math.min(margin, 50)
+          const high = Math.max(100 - margin, 50)
+          const next = Math.round(Math.min(high, Math.max(low, stored)) * 100) / 100
+          if (Math.abs(next - stored) >= 0.5) writeSettings({ x: next })
+        }
+        const onResize = () => {
+          if (!raf) {
+            raf = window.requestAnimationFrame
+              ? window.requestAnimationFrame(applyResize)
+              : (applyResize(), 0)
+          }
+          if (idleTimer) clearTimeout(idleTimer)
+          idleTimer = setTimeout(() => {
+            idleTimer = 0
+            setResizing(false)
+          }, RESIZE_IDLE_MS)
+        }
+
         window.addEventListener('pointermove', move)
         window.addEventListener('pointerup', finish)
         window.addEventListener('pointercancel', finish)
+        window.addEventListener('resize', onResize)
         return () => {
           window.removeEventListener('pointermove', move)
           window.removeEventListener('pointerup', finish)
           window.removeEventListener('pointercancel', finish)
+          window.removeEventListener('resize', onResize)
+          if (raf && window.cancelAnimationFrame) window.cancelAnimationFrame(raf)
+          if (idleTimer) clearTimeout(idleTimer)
           // A pending collapse must not fire after the overlay is gone.
           cancelLeave()
           dragSession = null
@@ -1032,14 +1119,19 @@ window.__ModuleLoader__.load({
       if (tasks.length) held.list = tasks
       const shown = tasks.length ? tasks : held.list
 
-      const pos = drag || { x: settings.x, y: settings.y }
-      const position = { top: pos.y + 'px' }
-      if (pos.x === null || pos.x === undefined) {
+      // Horizontal placement. While dragging, the raw pixel offset is used so
+      // the card tracks the pointer exactly; once dropped, the stored percentage
+      // takes over and the browser resolves it against the live window width.
+      const position = { top: (drag ? drag.y : settings.y) + 'px' }
+      if (drag) {
+        position.left = drag.x + 'px'
+        position.transform = 'none'
+      } else if (settings.x === null) {
         position.left = '50%'
         position.transform = 'translateX(-50%)'
       } else {
-        position.left = pos.x + 'px'
-        position.transform = 'none'
+        position.left = settings.x + '%'
+        position.transform = 'translateX(-50%)'
       }
       // Theme = custom properties on the wrapper. 'auto' contributes nothing, so
       // each rule falls through to the host token it already had.
@@ -1102,10 +1194,12 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         {
+          ref: wrapRef,
           className: cx(
             'ddp-wrap',
             peeking && !hasReal && 'ddp-wrap--peek',
             drag && 'ddp-wrap--drag',
+            resizing && 'ddp-wrap--resizing',
           ),
           'aria-live': 'polite',
           style: position,
