@@ -442,6 +442,48 @@ cm.flush()
 `smoke.mjs` 里有守卫：假 React 统计每次渲染的 hook 调用数，
 只要和第一次渲染不一致就 throw，所以这类 bug 在本地就能拦住。
 
+### 5.5 `engines.dsh` 必须带 prerelease 段
+
+`package.json` 写的是 `"dsh": ">=0.2.0-rc.1"`，**不是** `">=0.2.0"`。
+
+原因：semver 的 range 里如果没有 prerelease 标记，默认**不匹配任何 prerelease 版本**。
+当前运行的 DSH 是 `0.2.1-rc.2`（prerelease），`>=0.2.0` 会把它判成不满足，
+插件在安装/启用时被 `incompatible-version` 拒绝。写成 `>=0.2.0-rc.1` 后 range 才允许
+prerelease 参与比较，`0.2.1-rc.2` 通过。
+
+生态里的既有插件都是这么写的，可作参照：
+
+| 插件 | `engines.dsh` |
+| --- | --- |
+| dsh-cost-meter | `>=0.2.0-rc.1 <0.3.0-0` |
+| dsh-mnemon | `>=0.2.0-rc.2 <0.2.1-0 \|\| >=0.2.1-rc.1 <0.3.0-0` |
+| dsh-tool-manager | `>=0.2.0-rc.2` |
+| dsh-llm-retry-settings | `>=0.1.6-alpha.1` |
+
+上界故意不封（没有 `<0.3.0-0`）：本插件只用稳定扩展点，且所有观测逻辑都有 `try/catch`
+兜底，未来内部形状变了最坏是浮层不出现，不会伤到宿主。
+
+### 5.6 硬编码审计（换机器 / clone 后能不能跑）
+
+审计结论：**没有任何本机路径、端口、用户名、密钥**。逐项：
+
+| 看起来像硬编码的东西 | 实际是什么 | 换机器会坏吗 |
+| --- | --- | --- |
+| `ROUTE_PATH = '/download-progress/state'` | 相对路径，挂到宿主自己的 web server 上 | 不会 |
+| Client 轮询地址 | `new URL(ROUTE, window.location.origin)`，失败再退回相对路径 | 不会 |
+| `localStorage['dsh-download-progress:settings']` | 存储键，按 origin 隔离 | 不会 |
+| `@local/dsh-download-progress` | 包名。`@local` scope 不需要 registry | 不会 |
+| `smoke-host.mjs` 里的 `D:\work`、`C:\a b\f.zip` | 测试桩的假 cwd / 假路径 | 不会 |
+| `smoke.mjs` 加载 client.js 的路径 | 已改成 `fileURLToPath(import.meta.url)` 相对解析 | 不会 |
+| UI 全中文文案 | 设计如此（项目是中文文档） | 不会，但英文用户看得懂的程度有限 |
+
+验证方式：把仓库 clone 到临时目录后直接跑
+`node smoke.mjs` / `node smoke-host.mjs` / `import('./index.js')`，全部通过。
+说明代码不依赖本仓库所在位置。
+
+**唯一需要注意的耦合**：改包名时要同时改 `package.json` 的 `name` 与
+`cordis.patch.yml` 的 `name`，两者不一致会导致 bundle 挂载不上。
+
 ---
 
 ## 6. 安装 / 卸载 / 调试
