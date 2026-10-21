@@ -15,7 +15,12 @@
     ".": "./index.js",
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=18",
+    "dsh": ">=0.2.0-rc.1"
   },
   "files": [
     "index.js",

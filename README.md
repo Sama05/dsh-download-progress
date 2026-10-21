@@ -38,6 +38,28 @@ DSH 原生只在工具**开始**和**结束**时给你两个瞬间，中间是�
 
 ---
 
+## 支持的版本
+
+| 项 | 要求 | 说明 |
+| --- | --- | --- |
+| **DSH** | `>= 0.2.0-rc.1` | 已写入 `package.json` 的 `engines.dsh`。**完整验证于 `0.2.1-rc.2`** |
+| Node.js | `>= 18` | 不需要单独安装：插件跑在 DSH 内置的 Electron 里（0.2.1-rc.2 为 Electron 44 / Node 24） |
+| Chromium | `>= 111` | 毛玻璃与 `color-mix` 需要；DSH 0.2.x 自带 152，无需关心 |
+| 操作系统 | Windows / macOS / Linux | **只在 Windows 上实测过**；其余平台只依赖 Node 标准库与浏览器 API，理论可用但未验证 |
+| 第三方依赖 | 无 | 不需要 `npm install`，没有构建步骤 |
+
+关于 DSH 版本区间：
+
+- 区间下界 `0.2.0-rc.1` 对应插件用到的最小 API 面——`tools/execute` 瀑布钩子、`shell.overlay` /
+  `settings.section` 槽位、`plugin-manager/install-log` 事件、`webServer.register` 路由。
+  更早的版本（0.1.x）没有验证过，可能缺其中某个槽位。
+- 版本不满足时，DSH 的插件管理器会以 `incompatible-version` 拒绝加载并指出缺什么，
+  **不会静默坏掉**，也不会影响 DSH 本体。
+- 上界没有封死（没有写 `<0.3.0-0`），因为插件只用稳定扩展点，且所有观测逻辑都包在 `try/catch` 里；
+  即使未来某个内部形状变了，最坏结果是浮层不出现，而不是宿主出错。
+
+---
+
 ## 安装
 
 DSH 插件以 bundle 形式安装。把本仓库放到任意目录，然后让 DSH 安装它：
@@ -54,6 +76,16 @@ plugin_manager action=remove_bundle target="@local/dsh-download-progress"
 
 也可以手工安装：在 profile 的 `package.json` 里加一条
 `"@local/dsh-download-progress": "link:<本仓库绝对路径>"`，并把包名加进 `dsh.profile.bundles`。
+
+**不需要 `npm install`**，也没有构建步骤——源码就是最终产物，`clone` 下来直接装。
+
+装好后这样确认它活着：
+
+1. 「设置 → 插件」里能看到「下载进度条」这一页（说明 Client 半挂载成功）；
+2. 让 agent 执行一次 `curl -o <文件> <某个大文件 URL>`，浮层会出现在窗口上方。
+
+改包名的话记得**两个地方一起改**：`package.json` 的 `name` 与 `cordis.patch.yml` 里的
+`name`，两者必须一致，否则 bundle 挂载不到。
 
 配置在「设置 → 插件 → 下载进度条」里，无需改任何文件。
 
