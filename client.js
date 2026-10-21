@@ -89,8 +89,13 @@ window.__ModuleLoader__.load({
 .ddp-list{
   pointer-events:auto;display:flex;flex-direction:column;gap:8px;
   /* Cards carry a log line, so one row is ~62px plus the 8px gap: budget exactly
-     the requested rows instead of clipping the last card's tail. */
-  max-height:calc(var(--ddp-rows) * 62px + (var(--ddp-rows) - 1) * 8px + 6px);
+     the requested rows instead of clipping the last card's tail. The vh term is
+     a ceiling for short windows — without it a 6-row budget overflows the viewport
+     once the overlay is dragged near an edge. */
+  max-height:min(
+    calc(var(--ddp-rows) * 62px + (var(--ddp-rows) - 1) * 8px + 6px),
+    calc(100vh - 48px)
+  );
   overflow-y:auto;overflow-x:hidden;
   padding:2px;scrollbar-width:thin;
   cursor:grab;
@@ -163,6 +168,11 @@ window.__ModuleLoader__.load({
    whatever sits behind it. There is deliberately no specular corner bloom —
    real glass shows a hairline of light along its top edge, nothing more. */
 .ddp-card{
+  /* The list is a flex column with a max-height, so cards MUST opt out of
+     shrinking. Without this they compress into hairlines instead of the list
+     scrolling: overflow:hidden on the card zeroes its automatic minimum size,
+     which is exactly what lets flex squash it past its content. */
+  flex:0 0 auto;
   position:relative;isolation:isolate;overflow:hidden;
   background:var(--ddp-card-bg,var(--dsw-alias-bg-overlay,rgba(32,32,36,.9)));
   /* With no theme override, tint the host colour down so the blur has something

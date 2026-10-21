@@ -422,8 +422,13 @@ async function settle() {
   }
   if ((src.match(/\{/g) || []).length !== (src.match(/\}/g) || []).length)
     throw new Error('unbalanced braces in the CSS template')
+  // Regression guard: the card lives in a flex column with a max-height, and it
+  // has overflow:hidden — which zeroes its automatic minimum size. Drop this and
+  // ten simultaneous downloads squash into hairlines instead of scrolling.
+  if (!/\.ddp-card\{[^}]*flex:0 0 auto/.test(src))
+    throw new Error('.ddp-card must opt out of flex shrinking')
   void style
-  ok('css: the stylesheet is present with balanced braces')
+  ok('css: the stylesheet is present with balanced braces, cards cannot be squashed')
 }
 
 console.log('\nCLIENT STRESS OK — 50 cards, hostile payloads, route failures and narrow windows')
