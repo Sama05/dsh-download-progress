@@ -282,7 +282,7 @@ localStorage['dsh-download-progress:themes'] = JSON.stringify([
 - 键必须是 `--ddp-*`，且 `--ddp-rows`（布局变量）被**明确拒绝**，外部主题改不了排版；
 - 值与内置主题同一套变量名（`--ddp-accent` / `--ddp-fg` / `--ddp-fg-dim` / `--ddp-grip` /
   `--ddp-card-bg` / `--ddp-card-border` / `--ddp-track-bg` / `--ddp-pop-bg` / `--ddp-pop-border` /
-  `--ddp-scroll` / `--ddp-shadow` / `--ddp-inner-hi` / `--ddp-inner-shade` / `--ddp-glass` /
+  `--ddp-scroll` / `--ddp-shadow` / `--ddp-inner-hi` / `--ddp-glass` /
   `--ddp-sheen` / `--ddp-ripple` / `--ddp-chip-bg` / `--ddp-chip-border`）；
 - 与内置 id 重名的条目会被丢弃（内置优先）；值只接受 `#..`、`rgba(..)`、颜色名这类安全字符；
 - 不填的变量自动回落到宿主 `--dsw-alias-*`，所以**只写一两个变量也能用**。
@@ -294,18 +294,21 @@ localStorage['dsh-download-progress:themes'] = JSON.stringify([
 
 | 来源 | CSS | 变量 | 作用 |
 | --- | --- | --- | --- |
-| 半透明底 | `background: var(--ddp-card-bg, color-mix(in srgb, var(--dsw-alias-bg-overlay) 74%, transparent))` | `--ddp-card-bg` | 染色层。不透明度压到 ~0.62–0.66，让后面的模糊透出来 |
-| 模糊 + 饱和 + 提亮 | `backdrop-filter: var(--ddp-glass, blur(26px) saturate(185%))` | `--ddp-glass` | 玻璃的主体。26px 是苹果侧栏/弹窗的量级；`saturate` 把糊掉的颜色救回来；亮色主题再叠 `brightness(1.04)`、暗色 `1.10`，让玻璃比背后略亮一点才"浮"得起来 |
-| 细边框 | `1px solid var(--ddp-card-border, var(--dsw-alias-border-l1))` | `--ddp-card-border` | 玻璃的"切边"。亮色用 8% 黑、暗色用 10% 白，比淡色描边更像玻璃 |
-| 接触影 | `0 1px 2px rgba(0,0,0,.10)`（固定） | 无 | 让玻璃"贴着"表面，而不是悬在空中 |
-| 远景柔影 | `var(--ddp-shadow, …)` | `--ddp-shadow` | 单层大半径柔和阴影（亮 `0 10px 34px /.17`，暗 `0 12px 40px /.52`） |
-| 内顶亮线 | `inset 0 1px 0 var(--ddp-inner-hi, …)` | `--ddp-inner-hi` | 顶边一道细亮线，读作被光照到的玻璃上沿 |
-| 内底暗线 | `inset 0 -1px 0 var(--ddp-inner-shade, …)` | `--ddp-inner-shade` | 底边一道暗线，读作玻璃的**厚度**；上下两条内线一起才有"片材"的体积感 |
+| 半透明底 | `background: var(--ddp-card-bg, color-mix(in srgb, var(--dsw-alias-bg-overlay) 62%, transparent))` | `--ddp-card-bg` | 染色层。亮色压到 **0.26**、暗色 **0.40**，只为让背后的模糊透得出来 |
+| 模糊 + 饱和 | `backdrop-filter: var(--ddp-glass, blur(24px) saturate(180%))` | `--ddp-glass` | 玻璃的主体。亮色主题**不加** `brightness()`——那会把片子推向纸白；暗色保留 `1.06` |
+| 细边框 | `1px solid var(--ddp-card-border, var(--dsw-alias-border-l1))` | `--ddp-card-border` | 玻璃的"切边"。亮色 6% 黑、暗色 8% 白 |
+| 单层弥散影 | `var(--ddp-shadow, …)` | `--ddp-shadow` | 唯一的外阴影（亮 `0 10px 32px /.13`，暗 `0 12px 38px /.44`） |
+| 内顶亮线 | `inset 0 1px 0 var(--ddp-inner-hi, …)` | `--ddp-inner-hi` | 顶边一道细亮线，读作被光照到的玻璃上沿；这是唯一保留的内线 |
 | 顶部渐层 | `::before` 的 `linear-gradient(180deg, …)` | `--ddp-sheen` | 玻璃上沿略亮、到 46% 处淡出 |
 
-立体感是这几层一起叠出来的，缺一层就平：只有外阴影 → 像贴纸；只有内高光 → 像塑料；**接触影 + 内顶亮 + 内底暗**
-三件套齐了，才像一块有厚度的玻璃压在界面上。`--ddp-glass` 把整个 `backdrop-filter` 值交出去，所以
-外部主题能连模糊半径和提亮一起换，不用改 CSS。
+**曾经有两层被删掉了，别再往回加**：`0 1px 2px rgba(0,0,0,.10)` 接触影和
+`inset 0 -1px 0` 内底暗线。它们各自看都合理，但叠在带 `border-radius` 的半透明片上，
+会在四周画出一圈清晰的硬边环——用户的原话是"周围边框怎么有一圈阴影"。
+玻璃是靠弥散投影浮起来的，不是靠描一圈边。只保留内**顶**亮线：它是唯一不产生环状的层。
+
+亮色主题尤其容易翻车：`--ddp-card-bg` 一旦到 0.6 以上、再叠 `brightness(1.04)` 和
+0.42 的顶部渐层，就不会像玻璃，而像一张白卡片。当前三者的取值是 0.26 / 无提亮 / 0.14，
+是照着"能透出背后内容、又压得住文字"调出来的；要改就三个一起改。
 
 两个刻意的取舍：
 

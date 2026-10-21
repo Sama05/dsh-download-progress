@@ -177,18 +177,16 @@ window.__ModuleLoader__.load({
   background:var(--ddp-card-bg,var(--dsw-alias-bg-overlay,rgba(32,32,36,.9)));
   /* With no theme override, tint the host colour down so the blur has something
      to show. Themes hand over an already-translucent value, so they win as-is. */
-  background:var(--ddp-card-bg,color-mix(in srgb,var(--dsw-alias-bg-overlay,rgba(32,32,36,.9)) 74%,transparent));
+  background:var(--ddp-card-bg,color-mix(in srgb,var(--dsw-alias-bg-overlay,rgba(32,32,36,.9)) 62%,transparent));
   border:1px solid var(--ddp-card-border,var(--dsw-alias-border-l1,rgba(255,255,255,.10)));
   border-radius:12px;padding:8px 10px;
-  /* Depth comes from four cheap tricks stacked: a contact shadow so the pane
-     touches the surface instead of hovering in space, the themed ambient drop,
-     a lit top edge, and a shaded bottom edge that reads as the thickness of the
-     glass itself. */
+  /* One diffuse drop only. The contact shadow and the inset bottom shade that
+     used to sit here read as a hard ring traced around the card; real frosted
+     glass floats on a soft pool of light, it is not outlined. The lit top edge
+     stays — it is the one highlight that makes the pane look like a surface. */
   box-shadow:
-    0 1px 2px rgba(0,0,0,.10),
     var(--ddp-shadow,0 8px 30px rgba(0,0,0,.30)),
-    inset 0 1px 0 var(--ddp-inner-hi,rgba(255,255,255,.12)),
-    inset 0 -1px 0 var(--ddp-inner-shade,rgba(0,0,0,.18));
+    inset 0 1px 0 var(--ddp-inner-hi,rgba(255,255,255,.12));
   font-size:12px;line-height:1.45;
   color:var(--ddp-fg,var(--dsw-alias-label-primary,#e8e8ea));
   /* One variable so a theme can retune the whole material (radius, saturation,
@@ -222,10 +220,8 @@ window.__ModuleLoader__.load({
 .ddp-card:hover{
   transform:translateY(-1px);
   box-shadow:
-    0 2px 5px rgba(0,0,0,.14),
     var(--ddp-shadow,0 8px 30px rgba(0,0,0,.30)),
-    inset 0 1px 0 var(--ddp-inner-hi,rgba(255,255,255,.12)),
-    inset 0 -1px 0 var(--ddp-inner-shade,rgba(0,0,0,.18));
+    inset 0 1px 0 var(--ddp-inner-hi,rgba(255,255,255,.12));
 }
 /* While dragging the whole stack, a per-card hover lift would fight the gesture. */
 .ddp-wrap--drag .ddp-card:hover{transform:none}
@@ -425,18 +421,20 @@ window.__ModuleLoader__.load({
         '--ddp-fg': '#1b1b1f',
         '--ddp-fg-dim': '#5f5f68',
         // Frosted glass wants a light tint, not an opaque plate: the blur behind
-        // it supplies the rest of the material.
-        '--ddp-card-bg': 'rgba(255,255,255,.66)',
-        '--ddp-card-border': 'rgba(0,0,0,.08)',
+        // it supplies the rest of the material. Held low on purpose — at .66 this
+        // read as a white card with a blurry feel, not as glass over the page.
+        '--ddp-card-bg': 'rgba(255,255,255,.26)',
+        '--ddp-card-border': 'rgba(0,0,0,.06)',
         '--ddp-track-bg': 'rgba(0,0,0,.10)',
         '--ddp-pop-bg': '#ffffff',
         '--ddp-pop-border': 'rgba(0,0,0,.14)',
         '--ddp-scroll': 'rgba(0,0,0,.18)',
-        '--ddp-shadow': '0 2px 6px rgba(15,23,42,.07), 0 10px 34px rgba(15,23,42,.17)',
-        '--ddp-inner-hi': 'rgba(255,255,255,.85)',
-        '--ddp-inner-shade': 'rgba(15,23,42,.07)',
-        '--ddp-glass': 'blur(26px) saturate(190%) brightness(1.04)',
-        '--ddp-sheen': 'rgba(255,255,255,.42)',
+        // One diffuse drop, no contact shadow: that is what removes the ring.
+        '--ddp-shadow': '0 10px 32px rgba(15,23,42,.13)',
+        '--ddp-inner-hi': 'rgba(255,255,255,.55)',
+        // No brightness lift in light mode: it pushed the pane toward paper white.
+        '--ddp-glass': 'blur(24px) saturate(180%)',
+        '--ddp-sheen': 'rgba(255,255,255,.14)',
         '--ddp-ripple': 'rgba(90,140,255,.24)',
         '--ddp-chip-bg': 'rgba(0,0,0,.06)',
         '--ddp-chip-border': 'rgba(0,0,0,.14)',
@@ -446,17 +444,16 @@ window.__ModuleLoader__.load({
         '--ddp-grip': '#a8a8b0',
         '--ddp-fg': '#e8e8ea',
         '--ddp-fg-dim': '#a8a8b0',
-        '--ddp-card-bg': 'rgba(30,30,34,.62)',
-        '--ddp-card-border': 'rgba(255,255,255,.10)',
+        '--ddp-card-bg': 'rgba(28,28,32,.40)',
+        '--ddp-card-border': 'rgba(255,255,255,.08)',
         '--ddp-track-bg': 'rgba(255,255,255,.13)',
         '--ddp-pop-bg': '#2a2a30',
         '--ddp-pop-border': 'rgba(255,255,255,.14)',
         '--ddp-scroll': 'rgba(255,255,255,.18)',
-        '--ddp-shadow': '0 2px 6px rgba(0,0,0,.30), 0 12px 40px rgba(0,0,0,.52)',
-        '--ddp-inner-hi': 'rgba(255,255,255,.17)',
-        '--ddp-inner-shade': 'rgba(0,0,0,.42)',
-        '--ddp-glass': 'blur(26px) saturate(185%) brightness(1.10)',
-        '--ddp-sheen': 'rgba(255,255,255,.11)',
+        '--ddp-shadow': '0 12px 38px rgba(0,0,0,.44)',
+        '--ddp-inner-hi': 'rgba(255,255,255,.13)',
+        '--ddp-glass': 'blur(24px) saturate(180%) brightness(1.06)',
+        '--ddp-sheen': 'rgba(255,255,255,.08)',
         '--ddp-ripple': 'rgba(120,170,255,.22)',
         '--ddp-chip-bg': 'rgba(255,255,255,.14)',
         '--ddp-chip-border': 'rgba(255,255,255,.16)',
