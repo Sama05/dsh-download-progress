@@ -31,6 +31,7 @@
     "utils.js",
     "detect.js",
     "state.js",
+    "background.js",
     "client.js",
     "cordis.patch.yml",
     "locale/*.json",
