@@ -1123,6 +1123,119 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * The one task poller, shared by every surface that draws a task.
+     *
+     * The floating overlay and the composer chip sit in two different slots, so
+     * they are two different React trees and no context can join them. Each used
+     * to call useTasks() and therefore ran its own fetch loop: two requests a
+     * second for one route, two copies of the same list that could disagree for
+     * a tick, and two failure counters that could retire the same card at
+     * different moments. That is exactly the kind of split that makes a bug show
+     * up on one surface and not the other, so the loop and its state live here
+     * once and every surface reads the same frame.
+     *
+     * Reference counted: the first reader starts the loop, the last one stops it,
+     * so a session with every surface switched off still makes no requests.
+     */
+    const taskStore = {
+      /** Last frame, kept so a late subscriber starts from live data. */
+      tasks: [],
+      /** Readers to notify on every frame. */
+      readers: new Set(),
+      /** The one interval, or null while nobody is watching. */
+      timer: null,
+      /** Consecutive misses; any success resets it. */
+      failures: 0,
+
+      publish(next) {
+        this.tasks = next
+        for (const reader of this.readers) {
+          try {
+            reader(next)
+          } catch {
+            /* one broken reader must not starve the others */
+          }
+        }
+      },
+
+      miss() {
+        // Keep the last frame through a short blip, drop it once the host is
+        // clearly gone — the policy the per-component loop used, now applied
+        // once for every surface instead of once per surface.
+        if (++this.failures >= POLL_FAILURES_BEFORE_CLEAR) this.publish([])
+      },
+
+      tick() {
+        if (typeof document !== 'undefined' && document.hidden) return
+        fetch(stateUrl(), { cache: 'no-store' })
+          .then((res) => (res && res.ok ? res.json() : null))
+          .then((data) => {
+            if (!data) {
+              // Missing/!ok response: hold the frame, drop it after the ceiling.
+              this.miss()
+              return
+            }
+            this.failures = 0
+            this.publish(Array.isArray(data.tasks) ? data.tasks : [])
+          })
+          .catch(() => {
+            /* the host route is optional: stay silent when it is absent */
+            this.miss()
+          })
+      },
+
+      start() {
+        if (this.timer !== null) return
+        this.tick()
+        this.timer = setInterval(() => this.tick(), POLL_MS)
+      },
+
+      stop() {
+        if (this.timer === null) return
+        clearInterval(this.timer)
+        this.timer = null
+      },
+
+      /**
+       * Join the shared list.
+       *
+       * A late subscriber is handed the frame already on screen, so the chip
+       * does not blink through an empty list when the overlay mounted first.
+       * Nothing is handed over while the store is still empty: an idle mount is
+       * then not a state change, which keeps "no news" distinguishable from
+       * "the list just emptied".
+       *
+       * @param {(tasks: object[]) => void} reader
+       * @returns {() => void} unsubscribe
+       */
+      subscribe(reader) {
+        this.readers.add(reader)
+        if (this.tasks.length > 0) {
+          try {
+            reader(this.tasks)
+          } catch {
+            /* one broken reader must not starve the others */
+          }
+        }
+        this.start()
+        return () => {
+          this.readers.delete(reader)
+          if (this.readers.size === 0) this.stop()
+        }
+      },
+    }
+
+    /**
+     * Read the shared task list.
+     *
+     * `enabled` false means "this surface is off": it unsubscribes and reports
+     * nothing. That is what lets a disabled overlay leave the chip's loop
+     * running without drawing anything itself.
+     *
+     * @param {boolean} enabled
+     * @returns {object[]}
+     */
     function useTasks(enabled) {
       const [tasks, setTasks] = React.useState([])
       React.useEffect(() => {
@@ -1130,35 +1243,7 @@ window.__ModuleLoader__.load({
           setTasks([])
           return undefined
         }
-        let alive = true
-        let failures = 0
-        const tick = () => {
-          if (!alive) return
-          if (typeof document !== 'undefined' && document.hidden) return
-          fetch(stateUrl(), { cache: 'no-store' })
-            .then((res) => (res && res.ok ? res.json() : null))
-            .then((data) => {
-              if (!alive) return
-              if (!data) {
-                // Missing/!ok response: keep the last frame through a short blip,
-                // drop it once the host is clearly gone.
-                if (++failures >= POLL_FAILURES_BEFORE_CLEAR) setTasks([])
-                return
-              }
-              failures = 0
-              setTasks(Array.isArray(data.tasks) ? data.tasks : [])
-            })
-            .catch(() => {
-              /* the host route is optional: stay silent when it is absent */
-              if (alive && ++failures >= POLL_FAILURES_BEFORE_CLEAR) setTasks([])
-            })
-        }
-        tick()
-        const timer = setInterval(tick, POLL_MS)
-        return () => {
-          alive = false
-          clearInterval(timer)
-        }
+        return taskStore.subscribe(setTasks)
       }, [enabled])
       return tasks
     }

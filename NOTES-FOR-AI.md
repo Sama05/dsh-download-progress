@@ -109,15 +109,20 @@ Client 半是单文件 `client.js`，样式与结构分离得很干净：
 client.js
 ├── CSS            ← 所有视觉样式都在这一个模板字符串里（改外观只动这里）
 ├── describe(task) ← 数据 → 文案的映射（改文案只动这里）
+├── taskStore      ← 全插件唯一的轮询器（一个 fetch / 一个定时器 / 一份 tasks）
 ├── Card           ← 单条进度卡片（结构）
-├── Overlay        ← 浮层列表容器 + 1s 轮询
-└── InlineBar      ← 对话框工具行里的简易条（结构，见 §3.3）
+├── Overlay        ← 浮层列表容器（读 taskStore，自己不再 fetch）
+└── InlineBar      ← 对话框工具行里的简易条（读 taskStore，见 §3.3）
 ```
 
 - **改颜色/圆角/动画/位置** → 只改 `CSS` 常量。
 - **改文案/文案格式** → 只改 `describe()`；简易条的极简文案单独在 `briefOf()`（§3.3）。
 - **改卡片结构** → 只改 `Card()`。
 - **改简易条结构** → 只改 `InlineBar()`。
+- **改数据获取/失败策略** → 只改 `taskStore`。两个表面（浮层 + 简易条）都在不同槽位、
+  不同 React 树里，靠模块级 store 共享同一帧；`subscribe()` 引用计数，第一个订阅者启动、
+  最后一个退订停止。**不要**让任何表面自己 `fetch('/download-progress/state')`——
+  那会分裂成两份可能不一致的列表，bug 就只在一个表面上出现。
 
 样式注入走 `ctx.effect(() => { 建 <style id="dsh-download-progress-style">; return () => 移除 })`，
 随插件卸载自动清理，不污染全局。
@@ -449,8 +454,10 @@ var(--ddp-ripple) 0%, transparent 62%)`，平时 `opacity:0`，只有 `.ddp-ease
 不填就跟随 `--ddp-fg` / `--ddp-accent` 等既有 token。
 
 **显示方式开关**：`settings.display` = `overlay`（默认，行为与升级前完全一致）/ `inline` / `both`。
-`overlay` 时简易条**一个节点都不注册渲染**（`wantsInline` 为假 → `return null`，连轮询都不开）；
+`overlay` 时简易条**一个节点都不注册渲染**（`wantsInline` 为假 → `return null`，不订阅轮询）；
 `inline` 时 `Overlay` 自己返回 `null`。两种形态各自独立判空，不会同时抢屏。
+两者的轮询由模块级 `taskStore` 引用计数管理：只要还有任一表面订阅就保持一个 1s 循环，
+全部关掉才停——所以 `overlay` 模式下简易条不渲染，浮层仍照常刷新。
 
 **hooks 顺序**：`InlineBar` 里 `useSettings` / `useTasks` 全在顶部，`return null` 只出现在它们之后——
 与 §5.4 同一条规矩，`smoke.mjs` 的 hook 计数守卫也覆盖了它。

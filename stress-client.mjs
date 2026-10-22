@@ -340,6 +340,27 @@ async function settle() {
 }
 
 /* ------------------------------------------------------------------ */
+/* 3d. one poller feeds every surface                                  */
+/* ------------------------------------------------------------------ */
+
+{
+  // The overlay and the composer chip are separate slots, so they are separate
+  // React trees: nothing but a module-level store can join them. Two loops meant
+  // two requests per second for one route and two copies of the list that could
+  // disagree for a tick — a bug visible on one surface and not the other.
+  const app = boot({
+    tasks: [{ id: 's1', kind: 'download', label: 's.bin', bytes: 5, total: 10, speed: 2, elapsedMs: 9 }],
+  })
+  app.render('shell.overlay')
+  await settle()
+  app.render('conversation.input.left')
+  await settle()
+  if (app.intervals.length !== 1)
+    throw new Error('both surfaces must share one poller, got ' + app.intervals.length + ' intervals')
+  ok('poll: the overlay and the chip share a single poller')
+}
+
+/* ------------------------------------------------------------------ */
 /* 4. hook count is identical across every settings combination        */
 /* ------------------------------------------------------------------ */
 
