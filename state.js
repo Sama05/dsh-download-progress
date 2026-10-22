@@ -50,6 +50,31 @@ const MAX_TASK_MS = 30 * 60 * 1000
 const tasks = new Map()
 
 /**
+ * Session-title lookup, installed by the wiring layer.
+ *
+ * Only the Host can turn a `SessionId` into the name the user sees in the
+ * sidebar, and that name does not exist yet when the first download of a fresh
+ * session starts: DSH generates the title asynchronously from the first prompt.
+ * A task that resolved its title once, at start, would therefore keep an empty
+ * label for its whole life — so the lookup is repeated from `snapshot()`.
+ *
+ * @type {((sessionId: string) => string) | null}
+ */
+let titleResolver = null
+
+/** Re-ask for a session title at most this often, per task. */
+const TITLE_TTL_MS = 2000
+
+/**
+ * Install (or clear) the Host's session-title lookup.
+ *
+ * @param {((sessionId: string) => string) | null} resolver
+ */
+export function setTitleResolver(resolver) {
+  titleResolver = typeof resolver === 'function' ? resolver : null
+}
+
+/**
  * Visit every task of one kind.
  * Install cards are updated from two separate host events (log chunks and phase
  * changes) and both need "apply to all install tasks"; this keeps that loop in
@@ -79,6 +104,12 @@ export function beginTask(exec, plan, cwd) {
     id: String(exec?.callId ?? `${startedAt}-${Math.random()}`),
     kind: plan.kind,
     name: String(exec?.name ?? ''),
+    // Which session started this call. The overlay uses it to group several
+    // concurrent downloads into one small block per session, labelled with the
+    // session name. Empty when the call carries no agent (never in practice).
+    sessionId: String(exec?.agent?.id ?? ''),
+    sessionTitle: '',
+    titleAt: 0,
     label: plan.label ?? '',
     startedAt,
     bytes: 0,
@@ -240,6 +271,49 @@ export function noteInstallPhase(progress) {
 }
 
 /**
+ * Refresh one task's cached session title.
+ *
+ * Called from the snapshot route rather than from `beginTask` because DSH mints
+ * a session title asynchronously from the first prompt: a download that starts
+ * in the first seconds of a new session has no title yet, and one captured at
+ * start would stay blank forever. The cache is re-validated every
+ * `TITLE_TTL_MS`, so a title that lands mid-download appears on the next poll.
+ *
+ * @param {object} task
+ * @param {number} now
+ */
+function refreshTitle(task, now) {
+  if (!task.sessionId || !titleResolver) return
+  if (task.sessionTitle && now - task.titleAt < TITLE_TTL_MS) return
+  try {
+    const title = titleResolver(task.sessionId)
+    if (title) task.sessionTitle = String(title)
+  } catch {
+    /* a title lookup must never break the snapshot */
+  }
+  task.titleAt = now
+}
+
+/**
+ * Short, stable name for a session the Host could not name.
+ *
+ * A session that is still early in its first turn has no generated title, and a
+ * subagent session may never get one. The overlay still has to say *which*
+ * session a block belongs to, so the id prefix stands in — it matches what the
+ * GUI shows elsewhere and never changes for the life of the session.
+ *
+ * @param {string} sessionId
+ * @returns {string}
+ */
+export function fallbackSessionTitle(sessionId) {
+  const id = String(sessionId || '')
+  if (!id) return ''
+  // Keep the distinguishing tail of `session-<hex>`; a bare id keeps its head.
+  const tail = id.slice(-8)
+  return '会话 ' + tail
+}
+
+/**
  * The wire format the Client half polls.
  * Deliberately small and flat: this is serialised once per second per client.
  *
@@ -247,21 +321,27 @@ export function noteInstallPhase(progress) {
  */
 export function snapshot() {
   const now = Date.now()
-  return [...tasks.values()].map((task) => ({
-    id: task.id,
-    kind: task.kind,
-    name: task.name,
-    label: task.label,
-    bytes: task.bytes,
-    total: task.total,
-    speed: Math.round(task.speed),
-    phase: task.phase,
-    log: task.log,
-    startedAt: task.startedAt,
-    elapsedMs: Math.max(0, now - task.startedAt),
-    done: task.done,
-    // A download whose target could not be parsed: the client shows an
-    // indeterminate "载入中..." bar instead of a fake 0 B / 0 B.
-    unresolved: task.kind === 'download' && task.targets.length === 0,
-  }))
+  return [...tasks.values()].map((task) => {
+    refreshTitle(task, now)
+    return {
+      id: task.id,
+      kind: task.kind,
+      name: task.name,
+      label: task.label,
+      // Grouping key + the human name of the session that owns this call.
+      sessionId: task.sessionId,
+      sessionTitle: task.sessionTitle || fallbackSessionTitle(task.sessionId),
+      bytes: task.bytes,
+      total: task.total,
+      speed: Math.round(task.speed),
+      phase: task.phase,
+      log: task.log,
+      startedAt: task.startedAt,
+      elapsedMs: Math.max(0, now - task.startedAt),
+      done: task.done,
+      // A download whose target could not be parsed: the client shows an
+      // indeterminate "载入中..." bar instead of a fake 0 B / 0 B.
+      unresolved: task.kind === 'download' && task.targets.length === 0,
+    }
+  })
 }

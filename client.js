@@ -38,6 +38,9 @@ window.__ModuleLoader__.load({
 /* ---- floating overlay ---- */
 .ddp-wrap{
   --ddp-rows:3;
+  /* Height the session headers add; the overlay overwrites it once it knows how
+     many blocks it will draw. 0 keeps the single-session layout unchanged. */
+  --ddp-heads:0px;
   position:fixed;z-index:10000;pointer-events:none;
   width:min(560px,calc(100vw - 48px));
   display:flex;flex-direction:column;
@@ -93,7 +96,7 @@ window.__ModuleLoader__.load({
      a ceiling for short windows — without it a 6-row budget overflows the viewport
      once the overlay is dragged near an edge. */
   max-height:min(
-    calc(var(--ddp-rows) * 62px + (var(--ddp-rows) - 1) * 8px + 6px),
+    calc(var(--ddp-rows) * 62px + (var(--ddp-rows) - 1) * 8px + 6px + var(--ddp-heads, 0px)),
     calc(100vh - 48px)
   );
   overflow-y:auto;overflow-x:hidden;
@@ -273,6 +276,33 @@ window.__ModuleLoader__.load({
      line sat on whatever was behind it and stopped being readable. */
   opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
+
+/* Sessions. With downloads from more than one session the list groups them:
+   each group is a glass block carrying the session name, and the task cards
+   live inside it. With a single session nothing is wrapped, so the plain
+   one-session overlay keeps exactly the look it had before grouping existed. */
+.ddp-group{
+  flex:0 0 auto;display:flex;flex-direction:column;gap:8px;
+  padding:6px 6px 8px;border-radius:14px;
+  /* Barely-there tint, so a group reads as a container without becoming a
+     second material on top of the glass cards. */
+  background:var(--ddp-group-bg,rgba(255,255,255,.045));
+  border:1px solid var(--ddp-group-border,rgba(255,255,255,.07));
+}
+.ddp-group-head{
+  display:flex;align-items:baseline;gap:8px;
+  padding:0 2px;font-size:11px;line-height:1.4;
+  color:var(--ddp-fg-dim,var(--dsw-alias-label-secondary,#a8a8b0));
+}
+.ddp-group-name{
+  flex:1 1 auto;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-weight:500;
+}
+/* A session with several calls in flight: the count is the only cue that the
+   block holds more than the one card the header sits above. */
+.ddp-group-count{flex:0 0 auto;opacity:.75;font-variant-numeric:tabular-nums}
+.ddp-group-cards{display:flex;flex-direction:column;gap:8px}
 
 /* ---- settings page ---- */
 .ddp-set{display:flex;flex-direction:column;font-size:13px}
@@ -499,12 +529,17 @@ window.__ModuleLoader__.load({
 
     let extraThemes = null
 
+    // Layout variables are owned by the overlay, never by a theme: --ddp-rows is
+    // the row budget and --ddp-heads is the height the session headers add. A
+    // theme that could set either one would break the list's height maths.
+    const LAYOUT_TOKENS = ['--ddp-rows', '--ddp-heads']
+
     function sanitizeTokens(tokens) {
       const out = {}
       if (!tokens || typeof tokens !== 'object') return out
       Object.keys(tokens).forEach((key) => {
         const value = tokens[key]
-        if (!/^--ddp-[a-z0-9-]+$/.test(key) || key === '--ddp-rows') return
+        if (!/^--ddp-[a-z0-9-]+$/.test(key) || LAYOUT_TOKENS.indexOf(key) >= 0) return
         if (typeof value !== 'string' || !TOKEN_VALUE_RE.test(value)) return
         out[key] = value
       })
@@ -919,6 +954,95 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /* ---------------- per-session grouping ---------------- */
+
+    /**
+     * Which session a row belongs to, as a stable grouping key.
+     *
+     * Tasks from one session share this value and are drawn inside one block.
+     * Sample cards have no session at all, so they all land under '' and the
+     * overlay renders them as the flat list it has always been — a debug peek
+     * must not invent session blocks for data that belongs to no session.
+     *
+     * @param {object} task
+     */
+    function sessionKeyOf(task) {
+      return String((task && task.sessionId) || '')
+    }
+
+    /**
+     * The name shown on a session block.
+     *
+     * The host already resolves the real title and falls back to a short id, so
+     * this only has to cope with a row that carries neither (an older host, or a
+     * sample). '' means "no session", which keeps the flat one-session layout.
+     *
+     * @param {object} task
+     */
+    function sessionNameOf(task) {
+      const title = String((task && task.sessionTitle) || '')
+      if (title) return title
+      const id = String((task && task.sessionId) || '')
+      return id ? '会话 ' + id.slice(-8) : ''
+    }
+
+    /**
+     * Split an already-ordered row list into per-session runs.
+     *
+     * Deliberately a RUN of consecutive rows, not a dict keyed by session: the
+     * user's chosen order (newest-first / oldest-first) then still decides what
+     * is on top, and a session that starts a second download later returns to
+     * the top with a fresh block instead of silently reordering rows inside a
+     * block that is already on screen.
+     *
+     * @param {object[]} list ordered rows
+     * @returns {{key: string, name: string, tasks: object[]}[]}
+     */
+    function runsOf(list) {
+      const runs = []
+      for (const task of list) {
+        const key = sessionKeyOf(task)
+        const last = runs[runs.length - 1]
+        if (last && last.key === key) last.tasks.push(task)
+        else runs.push({ key, name: sessionNameOf(task), tasks: [task] })
+      }
+      return runs
+    }
+
+    /** One session block: a name header plus that session's cards. */
+    function Group(props) {
+      const run = props.run
+      return h(
+        'div',
+        { className: 'ddp-group' },
+        h(
+          'div',
+          { className: 'ddp-group-head' },
+          // The title gets the whole width; hovering a truncated one reveals it.
+          h('span', { className: 'ddp-group-name', title: run.name }, run.name),
+          run.tasks.length > 1
+            ? h('span', { className: 'ddp-group-count' }, run.tasks.length + ' 项')
+            : null,
+        ),
+        h(
+          'div',
+          { className: 'ddp-group-cards' },
+          run.tasks.map((task, index) =>
+            h(Card, {
+              key: task.id || String(index),
+              task,
+              showSpeed: props.showSpeed,
+              ease: props.ease,
+              phase: props.phase,
+              // The stagger is per session block, so two sessions that start at
+              // once do not double each other's delay into a 400ms wait.
+              index,
+            }),
+          ),
+        ),
+      )
+    }
+
     // Drag session lives at module scope: there is exactly one overlay, and the
     // move/up listeners are attached to the window, not to the element.
     let dragSession = null
@@ -1186,6 +1310,19 @@ window.__ModuleLoader__.load({
 
       const ordered = settings.order === 'newest-first' ? shown.slice().reverse() : shown
 
+      // Session blocks. One session keeps the flat list it has always been (the
+      // group header would be pure noise when there is nothing to tell apart);
+      // two or more sessions each get their own block, labelled with the name the
+      // sidebar shows. Sample cards carry no session id, so they always stay flat.
+      const runs = runsOf(ordered)
+      const grouped = runs.length > 1
+      // Every block adds a header line on top of its cards, so the height budget
+      // has to grow with the number of blocks or the last card gets clipped.
+      // One block costs 6+8 padding + 2 border + 8 gap + a 15.4px 11px header,
+      // so 40px keeps a little slack. The gap COUNT is unchanged by grouping
+      // ((N-1) between N cards either way), so nothing else needs adjusting.
+      position['--ddp-heads'] = grouped ? runs.length * 40 + 'px' : '0px'
+
       // Bail out only here: all hooks above have already run, so the hook count
       // stays identical whether or not anything is painted.
       if (!settings.enabled) return null
@@ -1255,16 +1392,26 @@ window.__ModuleLoader__.load({
                 className: 'ddp-list',
                 onPointerDown: beginDrag,
               },
-              ordered.map((task, index) =>
-                h(Card, {
-                  key: task.id || String(index),
-                  task,
-                  showSpeed: settings.showSpeed,
-                  ease: settings.enterAnim,
-                  phase: leaving ? 'out' : 'in',
-                  index,
-                }),
-              ),
+              grouped
+                ? runs.map((run, index) =>
+                    h(Group, {
+                      key: run.key || 'session-' + index,
+                      run,
+                      showSpeed: settings.showSpeed,
+                      ease: settings.enterAnim,
+                      phase: leaving ? 'out' : 'in',
+                    }),
+                  )
+                : ordered.map((task, index) =>
+                    h(Card, {
+                      key: task.id || String(index),
+                      task,
+                      showSpeed: settings.showSpeed,
+                      ease: settings.enterAnim,
+                      phase: leaving ? 'out' : 'in',
+                      index,
+                    }),
+                  ),
             )
           : null,
       )

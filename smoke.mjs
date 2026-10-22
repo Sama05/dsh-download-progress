@@ -409,9 +409,15 @@ easeSelect.node.props.onChange({ target: { value: 'float' } })
 console.log('  ok enter animation = ddp-ease-<id> per card, staggered, never on the list')
 
 /* ---- theme: the wrapper carries --ddp-* overrides, auto carries none ---- */
+// Layout variables are written by the overlay itself, never by a theme, so they
+// are excluded from every "did the theme touch this?" check below.
+const LAYOUT_VARS = ['--ddp-rows', '--ddp-heads']
+const themeKeys = (style) =>
+  Object.keys(style || {}).filter((k) => k.indexOf('--ddp-') === 0 && LAYOUT_VARS.indexOf(k) < 0)
+
 const autoStyle = idleTree.props.style || {}
-console.log('\ntheme auto overrides:', Object.keys(autoStyle).filter((k) => k.indexOf('--ddp-') === 0 && k !== '--ddp-rows').length)
-if (Object.keys(autoStyle).some((k) => k.indexOf('--ddp-') === 0 && k !== '--ddp-rows'))
+console.log('\ntheme auto overrides:', themeKeys(autoStyle).length)
+if (themeKeys(autoStyle).length)
   throw new Error('auto theme must not override host tokens, it should fall through to --dsw-alias-*')
 if (autoStyle.top !== '76px') throw new Error('auto theme must still position the wrapper')
 
@@ -429,7 +435,7 @@ if (darkStyle['--ddp-fg'] !== '#e8e8ea') throw new Error('dark theme must set --
 
 themeSelect.node.props.onChange({ target: { value: 'auto' } })
 const backToAuto = renderOverlay().props.style || {}
-if (Object.keys(backToAuto).some((k) => k.indexOf('--ddp-') === 0 && k !== '--ddp-rows'))
+if (themeKeys(backToAuto).length)
   throw new Error('switching back to auto must drop every override')
 console.log('  ok theme = css custom properties, auto falls through to host tokens')
 
@@ -533,6 +539,87 @@ if (oneCards.length !== 1) throw new Error('one real task must render exactly on
 if (findByClass(oneTree, 'ddp-handle').length) throw new Error('the handle must be hidden while a real task runs')
 if (oneTree.props.style['--ddp-rows'] !== '3') throw new Error('real tasks must still publish the row cap')
 console.log('  ok one real task = one card, no handle')
+
+/* ---- one session: no grouping, the flat list is untouched ----
+   The wrapper must stay byte-for-byte what it was before session blocks
+   existed, otherwise every single-download user pays for a feature they
+   cannot see. */
+CANNED_TASKS = [
+  { id: 's1a', kind: 'download', label: 'a.bin', bytes: 10, total: 100, speed: 5, elapsedMs: 1000, sessionId: 'sess-aaaa1111', sessionTitle: '整理素材库' },
+  { id: 's1b', kind: 'download', label: 'b.bin', bytes: 20, total: 100, speed: 5, elapsedMs: 1000, sessionId: 'sess-aaaa1111', sessionTitle: '整理素材库' },
+]
+const oneSessionTree = renderOverlay()
+const oneSessionGroups = findByClass(oneSessionTree, 'ddp-group')
+console.log('\none session: groups =', oneSessionGroups.length, '| cards =', findByClass(oneSessionTree, 'ddp-card').length)
+if (oneSessionGroups.length) throw new Error('a single session must not be boxed into a block')
+if (oneSessionTree.props.style['--ddp-heads'] !== '0px')
+  throw new Error('an ungrouped list must reserve no header height, got ' + oneSessionTree.props.style['--ddp-heads'])
+console.log('  ok one session = flat list, no block, no reserved header height')
+
+/* ---- two sessions: one block each, labelled with the session name ---- */
+CANNED_TASKS = [
+  { id: 'm1', kind: 'download', label: 'x.bin', bytes: 10, total: 100, speed: 5, elapsedMs: 1000, sessionId: 'sess-aaaa1111', sessionTitle: '整理素材库' },
+  { id: 'm2', kind: 'download', label: 'y.bin', bytes: 20, total: 100, speed: 5, elapsedMs: 1000, sessionId: 'sess-bbbb2222', sessionTitle: '打包发行版' },
+]
+const multiTree = renderOverlay()
+const multiGroups = findByClass(multiTree, 'ddp-group')
+const multiNames = multiGroups.map((g) => findByClass(g, 'ddp-group-name')[0].props.children)
+console.log('two sessions: groups =', multiGroups.length, '| names =', JSON.stringify(multiNames))
+if (multiGroups.length !== 2) throw new Error('two sessions must render two blocks, got ' + multiGroups.length)
+if (findByClass(multiTree, 'ddp-card').length !== 2) throw new Error('every task must still render inside its block')
+// newest-first is the default: the last task on the wire is drawn on top.
+if (multiNames[0] !== '打包发行版' || multiNames[1] !== '整理素材库')
+  throw new Error('blocks must follow the chosen order, got ' + JSON.stringify(multiNames))
+if (multiTree.props.style['--ddp-heads'] !== '80px')
+  throw new Error('two blocks must reserve two header lines, got ' + multiTree.props.style['--ddp-heads'])
+console.log('  ok two sessions = two labelled blocks, order preserved, header height reserved')
+
+/* ---- the label is the session title; without one, a short id instead ---- */
+CANNED_TASKS = [
+  { id: 'n1', kind: 'download', label: 'x.bin', bytes: 10, total: 100, speed: 5, elapsedMs: 1000, sessionId: 'sess-aaaa1111', sessionTitle: '整理素材库' },
+  { id: 'n2', kind: 'download', label: 'y.bin', bytes: 20, total: 100, speed: 5, elapsedMs: 1000, sessionId: 'sess-cccc3333' },
+]
+const fallbackTree = renderOverlay()
+const fallbackNames = findByClass(fallbackTree, 'ddp-group').map(
+  (g) => findByClass(g, 'ddp-group-name')[0].props.children,
+)
+console.log('  untitled session label =', JSON.stringify(fallbackNames))
+if (fallbackNames.indexOf('会话 cccc3333') < 0)
+  throw new Error('a session without a title must fall back to a short id, got ' + JSON.stringify(fallbackNames))
+console.log('  ok label = session title, falling back to 会话 <id tail>')
+
+/* ---- a session with several downloads says how many ---- */
+CANNED_TASKS = [
+  { id: 'p1', kind: 'download', label: 'x.bin', bytes: 10, total: 100, speed: 5, elapsedMs: 1000, sessionId: 'sess-aaaa1111', sessionTitle: '整理素材库' },
+  { id: 'p2', kind: 'download', label: 'y.bin', bytes: 20, total: 100, speed: 5, elapsedMs: 1000, sessionId: 'sess-aaaa1111', sessionTitle: '整理素材库' },
+  { id: 'p3', kind: 'download', label: 'z.bin', bytes: 30, total: 100, speed: 5, elapsedMs: 1000, sessionId: 'sess-bbbb2222', sessionTitle: '打包发行版' },
+]
+const countTree = renderOverlay()
+const countBlocks = findByClass(countTree, 'ddp-group')
+// Newest-first is the default, so the blocks come back reversed. Match by name
+// instead of by index, otherwise the test only proves the order by accident.
+const blockNamed = (name) =>
+  countBlocks.find((g) => findByClass(g, 'ddp-group-name')[0].props.children === name)
+const badgeOf = (name) => findByClass(blockNamed(name), 'ddp-group-count')[0]
+console.log('  badges =', JSON.stringify(countBlocks.map((g) => {
+  const badge = findByClass(g, 'ddp-group-count')[0]
+  return [findByClass(g, 'ddp-group-name')[0].props.children, badge ? badge.props.children : null]
+})))
+// Only the session that holds more than one card gets a count; a lone card
+// under a header that already says "1" would be noise.
+const twoBadge = badgeOf('整理素材库')
+if (!twoBadge || twoBadge.props.children !== '2 项')
+  throw new Error('the session with two cards must be labelled "2 项"')
+if (badgeOf('打包发行版')) throw new Error('a session with one card must not show a count')
+console.log('  ok multi-card sessions carry a count, single-card sessions do not')
+
+/* ---- samples belong to no session, so a peek stays flat ---- */
+CANNED_TASKS = []
+const sampleTree = renderOverlay()
+console.log('  debug peek: groups =', findByClass(sampleTree, 'ddp-group').length, '| cards =', findByClass(sampleTree, 'ddp-card').length)
+if (findByClass(sampleTree, 'ddp-group').length)
+  throw new Error('sample cards have no session and must render as the flat list')
+console.log('  ok debug peek = flat samples, no invented session blocks')
 
 /* ---- dragging the grip must move the wrapper, not the grip ---- */
 // The grip sits 12px below the wrapper's top edge and is only 56px wide. If the

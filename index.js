@@ -12,7 +12,14 @@
  *   index.js    wiring only (events, route, plugin export)  ← this file
  */
 import { classify } from './detect.js'
-import { beginTask, noteInstallLog, noteInstallPhase, snapshot, sweep } from './state.js'
+import {
+  beginTask,
+  noteInstallLog,
+  noteInstallPhase,
+  setTitleResolver,
+  snapshot,
+  sweep,
+} from './state.js'
 
 /** Where the Client half polls. Served by the host's own web server. */
 const ROUTE_PATH = '/download-progress/state'
@@ -42,9 +49,50 @@ async function resolveCwd(ctx, exec) {
 }
 
 /**
+ * Build the Host-side "what is this session called" lookup.
+ *
+ * Two services are involved and both are optional: `sessions` turns the id on
+ * the dispatch into a live `Session`, and `sessionTitle` folds that session's
+ * log into the name the sidebar shows. Neither is guaranteed to exist on an
+ * older host, so every step degrades to '' and the client falls back to a short
+ * id label instead of showing an unlabelled block.
+ *
+ * The lookup is deliberately lazy (called once per task per snapshot, not once
+ * per dispatch): DSH generates a session title asynchronously from the first
+ * prompt, so a download started in the opening seconds of a brand-new session
+ * has no title when the task is registered.
+ *
+ * @param {{get: (name: string) => any}} ctx
+ * @returns {(sessionId: string) => string}
+ */
+function makeTitleResolver(ctx) {
+  return (sessionId) => {
+    try {
+      const sessions = ctx.get('sessions')
+      const titles = ctx.get('sessionTitle')
+      if (!sessions || !titles || !sessionId) return ''
+      const session = sessions.get(sessionId)
+      if (!session) return ''
+      const snapshot = titles.get(session)
+      return snapshot && snapshot.title ? String(snapshot.title) : ''
+    } catch {
+      /* an older host, or a session that was torn down mid-download */
+      return ''
+    }
+  }
+}
+
+/**
  * @param {{effect: Function, on: Function, get: Function, webServer: {register: Function}}} ctx
  */
 export function apply(ctx) {
+  // Session names for the per-session grouping on the overlay. Cleared on
+  // disposal so a disabled plugin cannot hold a reference to the host services.
+  ctx.effect(() => {
+    setTitleResolver(makeTitleResolver(ctx))
+    return () => setTitleResolver(null)
+  })
+
   // The sampler. Wrapped in ctx.effect so disabling the plugin stops the timer.
   ctx.effect(() => {
     const timer = setInterval(() => {
