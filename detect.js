@@ -7,7 +7,7 @@
  * touches task state, which is why the rules can be reviewed in one screen.
  */
 import { basename, isAbsolute, resolve } from 'node:path'
-import { clip, extractUrl, uniq, unquote } from './utils.js'
+import { clip, extractUrl, text, uniq, unquote } from './utils.js'
 
 /* ------------------------------------------------------------------ */
 /* Which tools mean what                                               */
@@ -114,7 +114,7 @@ export function extractTargets(command, cwd) {
   // Tolerate a missing command line rather than throwing inside a tool dispatch:
   // this runs from a waterfall listener, where a throw would fail the very tool
   // call the plugin is only observing.
-  const source = String(command ?? '')
+  const source = text(command)
 
   /** Accept only something that looks like a path, then make it absolute. */
   const push = (raw) => {
@@ -188,7 +188,7 @@ export function extractTargets(command, cwd) {
  *   `null` means "not interesting": the caller then simply runs the tool.
  */
 export function classify(exec) {
-  const name = String(exec?.name ?? '')
+  const name = text(exec?.name)
   const args = exec?.arguments ?? {}
 
   if (SEARCH_TOOLS.has(name)) {
@@ -197,13 +197,13 @@ export function classify(exec) {
       kind: 'search',
       // The headline is clipped; `detail` keeps the full query for the log line.
       label: clip(query, 50),
-      detail: String(query ?? ''),
+      detail: text(query),
     }
   }
 
   if (FETCH_TOOLS.has(name)) {
     const url = args.url ?? ''
-    return { kind: 'fetch', label: clip(url, 120), detail: String(url ?? '') }
+    return { kind: 'fetch', label: clip(url, 120), detail: text(url) }
   }
 
   // The tool is called `plugin_manager` (underscore); the host EVENTS it emits use
@@ -211,14 +211,14 @@ export function classify(exec) {
   // only the underscore one is real, and matching the hyphen form silently meant
   // install cards never appeared at all.
   if (name === 'plugin_manager' || name === 'plugin-manager') {
-    const action = String(args.action ?? '')
+    const action = text(args.action)
     if (!action.includes('install')) return null
     return { kind: 'install', label: clip(args.target ?? args.name ?? '', 80) }
   }
 
   if (!SHELL_TOOLS.has(name)) return null
 
-  const command = String(args.command ?? args.text ?? '')
+  const command = text(args.command ?? args.text)
   if (!command) return null
 
   // An agent can inline an entire file into `pwsh -Command "..."`. The command

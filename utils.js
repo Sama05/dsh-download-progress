@@ -8,6 +8,35 @@
  */
 
 /**
+ * Coerce any value to a string without ever throwing.
+ *
+ * Plain `String(x)` throws for an object whose `toString`/`valueOf` are missing
+ * or non-callable. That shape never comes out of JSON, but `classify()` and
+ * `beginTask()` sit directly on the host's tool-dispatch path and receive
+ * whatever the caller built — and a throw there does not fail one card, it
+ * fails the dispatch. Everything user-supplied therefore goes through here.
+ *
+ * `null`/`undefined` become `''`; a bare object becomes `''` rather than the
+ * useless `[object Object]`, so labels stay empty instead of showing noise.
+ *
+ * @param {unknown} value
+ * @returns {string}
+ */
+export function text(value) {
+  if (value == null) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value)
+  }
+  try {
+    const out = String(value)
+    return out === '[object Object]' ? '' : out
+  } catch {
+    return ''
+  }
+}
+
+/**
  * Collapse runs of whitespace and hard-cut to `max` characters.
  * Used for every single-line label that ends up in a card (`log`, `label`), so
  * a multi-line command or pnpm block never turns into a tall wall of text.
@@ -16,10 +45,8 @@
  * @param {number} [max]
  * @returns {string}
  */
-export function clip(text, max = 50) {
-  const flat = String(text ?? '')
-    .replace(/\s+/g, ' ')
-    .trim()
+export function clip(value, max = 50) {
+  const flat = text(value).replace(/\s+/g, ' ').trim()
   return flat.length > max ? flat.slice(0, max) + '…' : flat
 }
 
@@ -32,7 +59,7 @@ export function clip(text, max = 50) {
  * @returns {string[]}
  */
 export function nonEmptyLines(raw) {
-  return String(raw ?? '')
+  return text(raw)
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
@@ -62,7 +89,7 @@ export function lastLine(raw) {
  * @returns {string}
  */
 export function extractUrl(command) {
-  const match = String(command).match(/https?:\/\/[^\s"'<>]+/)
+  const match = text(command).match(/https?:\/\/[^\s"'<>]+/)
   return match ? match[0] : ''
 }
 
@@ -88,5 +115,5 @@ export function uniq(list) {
  * @returns {string}
  */
 export function unquote(token) {
-  return String(token).replace(/^["']|["']$/g, '')
+  return text(token).replace(/^["']|["']$/g, '')
 }

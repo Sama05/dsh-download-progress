@@ -12,7 +12,7 @@
 import { statSync } from 'node:fs'
 import { basename } from 'node:path'
 import { PKG_RE, extractTargets } from './detect.js'
-import { clip, extractUrl, firstLine, lastLine } from './utils.js'
+import { clip, extractUrl, firstLine, lastLine, text } from './utils.js'
 
 /** Consecutive quiet samples before a finished download is considered settled. */
 export const IDLE_TICKS_TO_CLOSE = 3
@@ -101,13 +101,15 @@ function forEachTask(kind, mutate) {
 export function beginTask(exec, plan, cwd) {
   const startedAt = Date.now()
   const task = {
-    id: String(exec?.callId ?? `${startedAt}-${Math.random()}`),
+    // `||` rather than `??`: an empty callId would collide every such dispatch
+    // onto the same key, so a blank id gets a unique one too.
+    id: text(exec?.callId) || `${startedAt}-${Math.random()}`,
     kind: plan.kind,
-    name: String(exec?.name ?? ''),
+    name: text(exec?.name),
     // Which session started this call. The overlay uses it to group several
     // concurrent downloads into one small block per session, labelled with the
     // session name. Empty when the call carries no agent (never in practice).
-    sessionId: String(exec?.agent?.id ?? ''),
+    sessionId: text(exec?.agent?.id),
     sessionTitle: '',
     titleAt: 0,
     label: plan.label ?? '',
@@ -139,7 +141,7 @@ export function beginTask(exec, plan, cwd) {
     task.log = clip(url || task.targets[0] || firstLine(plan.command), 160)
     if (url) probeTotal(url, task)
   } else if (plan.kind === 'pkg') {
-    const match = String(plan.command).match(PKG_RE)
+    const match = text(plan.command).match(PKG_RE)
     task.label = match ? match[1].replace(/\s+/g, ' ') : '安装'
     task.log = clip(firstLine(plan.command), 160)
   } else if (plan.kind === 'install') {
@@ -148,6 +150,39 @@ export function beginTask(exec, plan, cwd) {
 
   tasks.set(task.id, task)
   return task
+}
+
+/**
+ * How many HEAD probes may be in flight at once.
+ *
+ * A probe is fire-and-forget: `beginTask` kicks it off and returns, so nothing
+ * upstream throttles them. A loop that issues two hundred curls therefore used
+ * to open two hundred probes at the same instant, each holding a socket and a
+ * six-second abort timer. Eight is enough to keep a burst resolving quickly
+ * while keeping the host's connection count flat.
+ */
+const PROBE_CONCURRENCY = 8
+
+/** Probes currently running, and the waiters queued behind the limit. */
+let probesInFlight = 0
+const probeWaiters = []
+
+/** Resolve once a probe slot is free, then take it. */
+async function acquireProbeSlot() {
+  if (probesInFlight < PROBE_CONCURRENCY) {
+    probesInFlight++
+    return
+  }
+  // The releasing probe hands its slot straight to this waiter, so the counter
+  // is not decremented and re-incremented in between.
+  await new Promise((resolve) => probeWaiters.push(resolve))
+}
+
+/** Release a slot, passing it to the oldest waiter if there is one. */
+function releaseProbeSlot() {
+  const next = probeWaiters.shift()
+  if (next) next()
+  else probesInFlight--
 }
 
 /**
@@ -161,6 +196,7 @@ export function beginTask(exec, plan, cwd) {
  * @param {object} task
  */
 async function probeTotal(url, task) {
+  await acquireProbeSlot()
   try {
     const res = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(6000) })
     // A rejected HEAD still carries a body length — Cloudflare answers 403 with a
@@ -172,6 +208,8 @@ async function probeTotal(url, task) {
     if (Number.isFinite(length) && length > 0) task.total = length
   } catch {
     /* best effort: keep total = null */
+  } finally {
+    releaseProbeSlot()
   }
 }
 
@@ -263,7 +301,7 @@ export function noteInstallLog(chunk) {
 
 /** Install phase (`installing` / `cancelling` / `applying`). */
 export function noteInstallPhase(progress) {
-  const phase = String(progress?.phase ?? '')
+  const phase = text(progress?.phase)
   if (!phase) return
   forEachTask('install', (task) => {
     task.phase = phase
@@ -287,7 +325,7 @@ function refreshTitle(task, now) {
   if (task.sessionTitle && now - task.titleAt < TITLE_TTL_MS) return
   try {
     const title = titleResolver(task.sessionId)
-    if (title) task.sessionTitle = String(title)
+    if (title) task.sessionTitle = text(title)
   } catch {
     /* a title lookup must never break the snapshot */
   }
@@ -306,7 +344,7 @@ function refreshTitle(task, now) {
  * @returns {string}
  */
 export function fallbackSessionTitle(sessionId) {
-  const id = String(sessionId || '')
+  const id = text(sessionId)
   if (!id) return ''
   // Keep the distinguishing tail of `session-<hex>`; a bare id keeps its head.
   const tail = id.slice(-8)

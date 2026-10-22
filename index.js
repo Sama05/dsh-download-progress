@@ -20,6 +20,7 @@ import {
   snapshot,
   sweep,
 } from './state.js'
+import { text } from './utils.js'
 
 /** Where the Client half polls. Served by the host's own web server. */
 const ROUTE_PATH = '/download-progress/state'
@@ -74,7 +75,7 @@ function makeTitleResolver(ctx) {
       const session = sessions.get(sessionId)
       if (!session) return ''
       const snapshot = titles.get(session)
-      return snapshot && snapshot.title ? String(snapshot.title) : ''
+      return snapshot && snapshot.title ? text(snapshot.title) : ''
     } catch {
       /* an older host, or a session that was torn down mid-download */
       return ''

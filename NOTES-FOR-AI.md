@@ -711,6 +711,8 @@ node smoke-host.mjs
 | `client.js` | Client 半：`CSS` + `describe()` + `Card` + `Overlay` + 设置页 |
 | `smoke.mjs` | 离线冒烟测试（假 window + 假 React，不需要浏览器） |
 | `smoke-host.mjs` | Host 半离线测试（假 `fs`，不需要启动 DSH） |
+| `stress-host.mjs` | Host 半压力测试（30 并发、畸形入参、上限与 wire 类型） |
+| `stress-round2.mjs` | 第二轮压测：1000 张卡、探针并发上限、模拟一小时 sweep、恶意会话名/日志、边 sweep 边注册 |
 | `NOTES-FOR-AI.md` | 本文档：实现笔记。刻意不叫 `AGENTS.md`，避免被 DSH 当项目指令每轮自动注入（约 11K token） |
 | `locale/en.json` / `locale/zh.json` | 插件元数据标题（插件列表里显示的名字） |
 | `icon.svg` | 插件图标 |
@@ -755,6 +757,56 @@ node smoke-host.mjs
 
 它解决的是**"agent 在后台默默下载，用户不知道要等多久"** 这一个场景，用宿主已有的最小扩展点做到，代价是只能看见落盘的文件。
 如果哪天宿主开始对外投影工具执行的字节进度，这个插件应当改为消费那个事件，而不是继续 `fs.stat`——`state.js` 已经把这层隔离好了。
+
+### 8.4 第二轮压测发现的两个真实问题（已修，2026-10-22）
+
+压测脚本 `stress-round2.mjs`，全部断言带数字输出，不是只报红绿。
+
+**问题一：HEAD 探针无上限并发。**
+`probeTotal()` 是 fire-and-forget，`beginTask()` 发起后立即返回，上游没有任何节流。
+一个 `for` 循环发 200 个 curl，就会在同一瞬间打开 200 个 HEAD 请求，各占一个 socket
+和一根 6 秒的 `AbortSignal.timeout`。修法是模块级信号量 `PROBE_CONCURRENCY = 8`：
+
+```js
+async function probeTotal(url, task) {
+  await acquireProbeSlot()
+  try { /* … fetch … */ } finally { releaseProbeSlot() }
+}
+```
+
+`releaseProbeSlot()` 把空出的槽**直接交给下一个等待者**（`probesInFlight` 不减再加），
+所以计数始终准确。实测 40 个并发下载打到本地慢速服务：峰值并发 8，40 个全部拿到
+`content-length`（排队不丢结果）。
+
+**副作用（意外收益）：注册耗时 303 ms → 8 ms。**
+改之前 `beginTask()` 里同步调用 `fetch()`，1000 张卡的注册开销主要是 1000 次 fetch 的
+同步部分。改成先 `await` 拿槽位后，fetch 真正落到微任务里，注册路径只剩正则与 Map 写入。
+
+**问题二：`String()` 会抛异常，而它跑在宿主分发路径上。**
+`classify()` 和 `beginTask()` 直接接宿主的 `exec`，参数是调用方构造的任意对象。
+`String({toString: null})` 抛 `TypeError: Cannot convert object to primitive value`
+——这不是"某张卡显示不出来"，而是**整个工具调用失败**。
+`utils.js` 因此新增 `text()`：安全强转，`null`/`undefined` → `''`，裸对象 → `''`
+（不返回无意义的 `[object Object]`），其余走 `String()` 并兜住异常。
+`utils.js` 全部四个字符串函数、`detect.js` 六处、`state.js` 七处、`index.js` 一处都已换掉。
+
+顺带修掉一个真实的键冲突：`id: String(exec?.callId ?? fallback)` 在 `callId === ''`
+时**不会**回退（`??` 只认 `null`/`undefined`），所有空 callId 的调用会挤在同一个键上、
+互相覆盖。改成 `text(exec?.callId) || fallback`。
+
+**压测测到的数字（本机，作为回归基线）：**
+
+| 场景 | 结果 |
+| --- | --- |
+| 1000 张卡注册 | 8 ms（修前 303 ms） |
+| 1000 张卡 `snapshot()` | <1 ms |
+| 1000 张卡 wire body | 242 KB |
+| 3600 次 sweep / 50 个增长中的文件 | 1236 ms，堆 +2.7 MB（无泄漏） |
+| 200 KB 命令行的 `extractTargets` | 0.2 ms |
+| 40 个并发下载的探针峰值 | 8 |
+
+`snapshot()` 与 `sweep()` 本身没有改：它们的复杂度已经是线性的，且实测远低于预算，
+提前优化只会换来没必要的复杂度。
 
 ---
 
