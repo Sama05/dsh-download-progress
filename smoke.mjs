@@ -893,7 +893,8 @@ console.log('  ok reset position + no peek state persisted')
 /* ---- inline bar: the compact presenter in the composer tool row ---- */
 // Registered into a LIST slot that other plugins also fill, so the two things
 // that must hold are (a) it never grows and pushes a neighbour off, and (b) it
-// paints nothing at all when this conversation is idle.
+// only ever paints this conversation's own work — an idle session shows the
+// resting dots, never another session's numbers.
 console.log('\n---- inline bar ----')
 const inlineSlot = registrations.find((r) => r.spec.name === 'conversation.input.left')
 if (!inlineSlot) throw new Error('the composer tool row registration is missing')
@@ -911,14 +912,22 @@ if (renderInline() !== null)
   throw new Error('with display = overlay the inline bar must not paint anything')
 console.log('  ok display = overlay -> no chip in the tool row')
 
-// Nothing of THIS session in flight: an empty chip would spend a neighbour's
-// space on no information.
+// Nothing of THIS session in flight: the chip stays as the resting dots — that
+// is what the ring collapses into — but it must never borrow a neighbour's
+// numbers to fill the shape.
 displaySelect.node.props.onChange({ target: { value: 'inline' } })
-if (renderInline({ sessionId: 'some-other-session' }) !== null)
-  throw new Error('the bar must only ever show the session whose composer it sits in')
+const restTree = renderInline({ sessionId: 'some-other-session' })
+if (!restTree) throw new Error('an idle session still owns the resting chip')
+if (String(restTree.props.className) !== 'ddp-mx ddp-mx--dots')
+  throw new Error('idle must paint the three dots, got ' + restTree.props.className)
+const restText = []
+walk(restTree, 0, restText)
+const restFlat = restText.map(String).join(' ')
+if (/MB|KB|%/.test(restFlat))
+  throw new Error("the idle chip must not borrow another session's numbers: " + restFlat)
 if (renderInline({ sessionId: '' }) !== null)
   throw new Error('with no session id the bar must not guess: it renders nothing')
-console.log('  ok other session / no session -> nothing')
+console.log('  ok other session -> resting dots, no session -> nothing')
 
 // One real download with a known total: the bar body + rate. The name, the log
 // and the byte counters stay out — this is the compact presenter.
@@ -938,20 +947,26 @@ if (inlineClass !== 'ddp-mx ddp-mx--bar')
 const glance = mxText.filter((t) => String(t).indexOf('%') < 0)
 if (glance.join('') !== '1.20 MB/s')
   throw new Error('the compact bar shows the rate and nothing else, got ' + JSON.stringify(mxText))
-const fill = findByClass(inlineTree, 'ddp-mx-fill')[0]
-if (!fill) throw new Error('the bar needs a fill')
-if ((fill.props.style || {}).width !== '50.0%')
-  throw new Error('fill width must be the real fraction, got ' + JSON.stringify(fill.props.style))
+// The fraction now lives on the progress path's dash array: 50% of the 59-unit
+// straight run. The rounded caps add the last 5px visually.
+const prog = findByClass(inlineTree, 'ddp-mx-prog')[0]
+if (!prog) throw new Error('the bar needs a progress path')
+if ((prog.props.style || {}).strokeDasharray !== '29.50 200')
+  throw new Error('the progress path must carry the real fraction, got ' + JSON.stringify(prog.props.style))
 const mxTip = findByClass(inlineTree, 'ddp-mx-tip')[0]
 if (!mxTip || mxTip.props.children !== '50.0%')
   throw new Error('hovering the bar must reveal the percentage')
 if (findByClass(inlineTree, 'ddp-mx-log').length || findByClass(inlineTree, 'ddp-mx-name').length)
   throw new Error('the compact chip must not print the name or the log line')
-// All three bodies stay mounted so the shape can morph; the class decides which
-// one is visible, which is what the CSS collapse keys off.
-for (const body of ['ddp-mx-track', 'ddp-mx-ring', 'ddp-mx-dots'])
+// Both shapes are one clipped viewBox with two stroked paths, so the ring can
+// unroll into the bar instead of two elements cross-fading.
+for (const body of ['ddp-mx-shape', 'ddp-mx-arc', 'ddp-mx-prog', 'ddp-mx-dots'])
   if (!findByClass(inlineTree, body).length)
     throw new Error('the ' + body + ' body must stay mounted for the morph')
+// The browser's own tooltip duplicated our hover bubble, painted in system
+// chrome and faded on its own schedule. The aria values carry the number.
+if ('title' in (inlineTree.props || {}))
+  throw new Error('the chip must not carry a native title tooltip')
 console.log('  ok determinate = bar(50%) + rate + hover tip, no detail rows, all bodies mounted')
 
 // Choosing the simple bar as the ONLY presenter must retire the floating stack,
@@ -979,8 +994,8 @@ if (!searchTip || String(searchTip.props.children).indexOf('搜索中') !== 0)
 const searchGlance = searchText.filter((t) => String(t) !== String(searchTip.props.children))
 if (searchGlance.join('') !== '')
   throw new Error('the ring body carries no text of its own, got ' + JSON.stringify(searchGlance.map(String)))
-if ((findByClass(searchTree, 'ddp-mx-fill')[0].props.style || {}).width !== '0%')
-  throw new Error('without a total the fill must be pinned to zero')
+if ((findByClass(searchTree, 'ddp-mx-prog')[0].props.style || {}).strokeDasharray !== '9 24')
+  throw new Error('without a total the ring shows its short spinning arc, not a fraction')
 
 CANNED_TASKS = [{ id: 'f', kind: 'fetch', sessionId: TEST_SESSION, elapsedMs: 5200 }]
 const fetchTip = findByClass(renderInline(), 'ddp-mx-tip')[0]
@@ -1027,7 +1042,7 @@ const multiText = []
 walk(renderInline(), 0, multiText)
 console.log('  multi chip =', JSON.stringify(multiText.map(String)))
 if (multiText.indexOf('+2') < 0) throw new Error('a session with 3 calls must say how many follow')
-if (findByClass(renderInline(), 'ddp-mx-fill')[0].props.style.width !== '50.0%')
+if (findByClass(renderInline(), 'ddp-mx-prog')[0].props.style.strokeDasharray !== '29.50 200')
   throw new Error('the bar must track this session\'s own oldest task, not another session\'s')
 
 // Speed is a setting here too, and the theme reaches the chip through the same
@@ -1047,6 +1062,26 @@ const themed = renderInline()
 if (!themed || !themed.props.style || themed.props.style['--ddp-fg'] !== '#1b1b1f')
   throw new Error('the inline bar must take its look from the same theme tokens as the overlay')
 console.log('  ok theme tokens reach the chip; speed setting respected')
+
+// The morph is only real if both states declare the same command list, because
+// that is the precondition Chromium puts on interpolating d. These assertions
+// exist so a later edit cannot quietly turn the morph back into a cross-fade.
+const cssBlock = src.slice(src.indexOf('.ddp-mx{'), src.indexOf('/* ---- settings page ---- */'))
+const ringD = (cssBlock.match(/d:path\("([^"]+)"\)/g) || []).map((m) => m.slice(m.indexOf('"') + 1, -2))
+if (ringD.length < 2)
+  throw new Error('both the ring and the bar state must declare a d, or the shape cannot interpolate')
+const cmds = (d) => (d.match(/[A-Za-z]/g) || []).join('')
+if (cmds(ringD[0]) !== cmds(ringD[1]))
+  throw new Error('the two d values must share a command list: ' + cmds(ringD[0]) + ' vs ' + cmds(ringD[1]))
+if (cmds(ringD[0]) !== 'MCCCC')
+  throw new Error('expected M plus four C segments, got ' + cmds(ringD[0]))
+if (cssBlock.indexOf('.ddp-mx-fill') >= 0)
+  throw new Error('the fill span is gone; the shape is drawn as SVG paths now')
+if (/\.ddp-mx:hover\{[^}]*transform:/.test(cssBlock))
+  throw new Error('hover must not translate the chip: it makes the readout flicker on the edge')
+if (cssBlock.indexOf('border:0') < 0)
+  throw new Error('the capsule must be borderless so the morph reads as one shape')
+console.log('  ok one path morphs ring -> bar (M+4C in both states), borderless capsule')
 themeDrop.node.props.onChange({ target: { value: 'auto' } })
 displaySelect.node.props.onChange({ target: { value: 'overlay' } })
 CANNED_TASKS = []

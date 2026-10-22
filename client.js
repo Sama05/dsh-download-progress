@@ -443,21 +443,21 @@ window.__ModuleLoader__.load({
   font-variant-numeric:tabular-nums;
   color:var(--ddp-fg,var(--dsw-alias-label-primary,#e8e8ea));
   background:var(--ddp-mx-bg,rgba(255,255,255,.07));
-  border:1px solid var(--ddp-mx-border,rgba(255,255,255,.12));
+  /* No border. A stroke around the capsule made the shape change read as a box
+     being resized instead of one mark unfolding into another. */
+  border:0;
   /* Same glass recipe as a card, weaker: the tool row is already a material and
      a second opaque plate on top of it would read as a button, not a readout. */
   -webkit-backdrop-filter:var(--ddp-mx-glass,blur(10px) saturate(160%));
   backdrop-filter:var(--ddp-mx-glass,blur(10px) saturate(160%));
-  /* Pointing at the chip lifts it a hair and brightens the plate. Kept to
-     background/border/shadow/1px translate: no size change, so the row never
-     reflows while the pointer crosses it. */
-  transition:background .18s ease,border-color .18s ease,box-shadow .22s ease,transform .18s ease;
+  /* Hover brightens the plate only. It must not move the box: the old 1px lift
+     walked the pointer off the chip's bottom edge, which dropped :hover, moved
+     it back, and made the readout flicker every frame. */
+  transition:background .18s ease,box-shadow .22s ease;
 }
 .ddp-mx:hover{
   background:var(--ddp-mx-bg-hover,rgba(255,255,255,.13));
-  border-color:var(--ddp-mx-border-hover,rgba(255,255,255,.26));
   box-shadow:0 3px 12px -4px rgba(0,0,0,.42);
-  transform:translateY(-1px);
 }
 /* ---------------------------------------------------------------------------
    Three bodies, one capsule.
@@ -473,57 +473,94 @@ window.__ModuleLoader__.load({
    while the ring grows out of it in the same 300ms. Unmounting either side
    would snap the capsule's width and look like a jump cut.
    --------------------------------------------------------------------------- */
-.ddp-mx-track{
-  /* 36px floor so the fraction stays legible, 64px preferred, and it is the
-     first thing to give up space when the row is full. */
-  flex:0 1 auto;min-width:0;width:0;height:5px;
-  border-radius:999px;overflow:hidden;
-  background:var(--ddp-track-bg,var(--dsw-alias-bg-layer-2,rgba(255,255,255,.13)));
-  opacity:0;margin-right:0;
-  transition:width .3s cubic-bezier(.4,0,.2,1),opacity .2s ease,margin-right .3s cubic-bezier(.4,0,.2,1);
+/* ---- one path, two shapes ------------------------------------------------
+   The bar and the ring are the SAME two stroked paths; only their d differs.
+   Chromium interpolates d between two paths that share a command list, so the
+   ring genuinely unrolls into the bar instead of one element fading out while
+   another fades in. Both states are M plus four C segments, which is what
+   makes the interpolation legal: two straight runs and two degenerate curves
+   in the bar state match the four quarter-arcs of the ring point for point.
+
+   The wrapper clips from 13px to 64px wide, so the ring (drawn in the left
+   13px of a 64px viewBox) opens to the right as the path straightens, and the
+   cut at the top of the ring becomes the leading edge of the bar.
+   ------------------------------------------------------------------------- */
+.ddp-mx-shape{
+  position:relative;flex:0 0 auto;
+  width:13px;height:13px;overflow:hidden;border-radius:999px;
+  transform-origin:center;
+  /* The shape scales in from the dots' centre, so leaving or entering the
+     idle state reads as the dots condensing into a ring rather than as two
+     widgets swapping places. */
+  transition:width .9s cubic-bezier(.32,.72,0,1),
+             opacity .4s ease,
+             transform .75s cubic-bezier(.32,.72,0,1);
 }
-.ddp-mx--bar .ddp-mx-track{width:64px;min-width:36px;opacity:1;margin-right:6px}
-.ddp-mx-fill{
-  position:relative;height:100%;border-radius:999px;overflow:hidden;
-  background:var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff));
-  background:color-mix(in srgb,var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff)) 82%,transparent);
-  transition:width .45s linear;
+.ddp-mx--bar .ddp-mx-shape{width:64px}
+.ddp-mx--dots .ddp-mx-shape{width:0;opacity:0;transform:scale(.25)}
+.ddp-mx-shape > svg{display:block;width:64px;height:13px}
+/* The same breath the dots have, carried by the live bodies: a running task
+   should read as alive, not as a frozen gauge. Kept to opacity on purpose —
+   scaling the paths would push the bar past the 13px clip and shear its ends. */
+.ddp-mx--ring .ddp-mx-shape > svg,
+.ddp-mx--bar .ddp-mx-shape > svg{animation:ddp-mx-glow 1.2s ease-in-out infinite}
+@keyframes ddp-mx-glow{
+  0%,100%{opacity:.68}
+  45%{opacity:1}
 }
-/* The shimmer. It lives on the fill (not the track) so the light only ever
-   travels over bytes that are actually done — a sweep across the empty part
-   would read as progress that is not happening. */
-.ddp-mx-fill::after{
-  content:'';position:absolute;inset:0;
-  background:linear-gradient(90deg,transparent,rgba(255,255,255,.55),transparent);
+.ddp-mx-arc,.ddp-mx-prog{
+  fill:none;stroke-linecap:round;
+  /* Clockwise from the top; 5.25 is the ring's centre-line radius. */
+  d:path("M 6.5 1.25 C 9.4 1.25 11.75 3.6 11.75 6.5 C 11.75 9.4 9.4 11.75 6.5 11.75 C 3.6 11.75 1.25 9.4 1.25 6.5 C 1.25 3.6 3.6 1.25 6.5 1.25");
+  transition:d .9s cubic-bezier(.32,.72,0,1),
+             stroke-width .9s cubic-bezier(.32,.72,0,1),
+             stroke-dasharray .9s cubic-bezier(.32,.72,0,1),
+             opacity .4s ease;
+}
+.ddp-mx--bar .ddp-mx-arc,.ddp-mx--bar .ddp-mx-prog{
+  d:path("M 2.5 6.5 C 22 6.5 42 6.5 61.5 6.5 C 61.5 6.5 61.5 6.5 61.5 6.5 C 61.5 6.5 61.5 6.5 61.5 6.5 C 61.5 6.5 61.5 6.5 61.5 6.5");
+}
+.ddp-mx-arc{
+  stroke:var(--ddp-track-bg,var(--dsw-alias-bg-layer-2,rgba(255,255,255,.16)));
+  stroke-width:2.5;
+  /* A 40-degree bite out of the ring, at the top: that is the cut that opens. */
+  stroke-dasharray:29.3 3.7;
+}
+.ddp-mx--bar .ddp-mx-arc{stroke-width:5;stroke-dasharray:200 0}
+.ddp-mx-prog{
+  stroke:var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff));
+  stroke-width:2.5;
+  transform-origin:6.5px 6.5px;
+  animation:ddp-mx-spin .85s linear infinite;
+}
+.ddp-mx--bar .ddp-mx-prog{stroke-width:5;animation:none}
+.ddp-mx:hover .ddp-mx-prog{animation-duration:.55s}
+@keyframes ddp-mx-spin{to{transform:rotate(360deg)}}
+/* The shimmer still lives on the wrapper, so the light only travels over the
+   filled part and never over the empty groove. */
+.ddp-mx-shape::after{
+  content:'';position:absolute;inset:0;pointer-events:none;opacity:0;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.5),transparent);
   transform:translateX(-100%);
-  animation:ddp-mx-shine 1.9s ease-in-out infinite;
 }
+.ddp-mx--bar .ddp-mx-shape::after{opacity:1;animation:ddp-mx-shine 1.9s ease-in-out infinite}
 @keyframes ddp-mx-shine{
   0%{transform:translateX(-100%)}
   60%,100%{transform:translateX(100%)}
 }
-/* Hover speeds the light up a touch, so pointing at the chip visibly answers. */
-.ddp-mx:hover .ddp-mx-fill::after{animation-duration:1.1s}
-
-.ddp-mx-ring{
-  flex:0 0 auto;width:0;height:13px;border-radius:999px;
-  opacity:0;margin-right:0;
-  background:conic-gradient(from 0deg,transparent 0deg,var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff)) 300deg,var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff)) 360deg);
-  -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 2.5px),#000 calc(100% - 2.5px));
-  mask:radial-gradient(farthest-side,transparent calc(100% - 2.5px),#000 calc(100% - 2.5px));
-  animation:ddp-mx-spin .85s linear infinite;
-  transition:width .3s cubic-bezier(.4,0,.2,1),opacity .2s ease;
-}
-.ddp-mx--ring .ddp-mx-ring{width:13px;opacity:1}
-@keyframes ddp-mx-spin{to{transform:rotate(360deg)}}
-.ddp-mx:hover .ddp-mx-ring{animation-duration:.55s}
+.ddp-mx:hover .ddp-mx-shape::after{animation-duration:1.1s}
 
 .ddp-mx-dots{
   flex:0 0 auto;display:inline-flex;align-items:center;gap:3px;
   width:0;overflow:hidden;opacity:0;margin-right:0;
-  transition:width .3s cubic-bezier(.4,0,.2,1),opacity .2s ease;
+  transform-origin:center;
+  transition:width .4s cubic-bezier(.4,0,.2,1),
+             opacity .4s ease,
+             transform .75s cubic-bezier(.32,.72,0,1);
 }
-.ddp-mx--dots .ddp-mx-dots{width:18px;opacity:1}
+.ddp-mx--dots .ddp-mx-dots{width:18px;opacity:1;transform:scale(1)}
+.ddp-mx--ring .ddp-mx-dots,
+.ddp-mx--bar .ddp-mx-dots{transform:scale(.35)}
 .ddp-mx-dots > span{
   flex:0 0 auto;width:4px;height:4px;border-radius:999px;
   background:var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff));
@@ -532,8 +569,8 @@ window.__ModuleLoader__.load({
 .ddp-mx-dots > span:nth-child(2){animation-delay:.16s}
 .ddp-mx-dots > span:nth-child(3){animation-delay:.32s}
 @keyframes ddp-mx-breathe{
-  0%,100%{opacity:.3;transform:translateY(0) scale(.85)}
-  40%{opacity:1;transform:translateY(-1.5px) scale(1.05)}
+  0%,100%{opacity:.28;transform:translateY(0) scale(.72)}
+  45%{opacity:1;transform:translateY(-1.5px) scale(1.12)}
 }
 
 .ddp-mx-rate{
@@ -541,7 +578,7 @@ window.__ModuleLoader__.load({
   max-width:0;opacity:0;margin-left:0;
   transition:max-width .3s cubic-bezier(.4,0,.2,1),opacity .2s ease,margin-left .3s cubic-bezier(.4,0,.2,1);
 }
-.ddp-mx--bar .ddp-mx-rate{max-width:80px;opacity:.85;margin-left:6px}
+.ddp-mx--bar .ddp-mx-rate{max-width:80px;opacity:.85;min-width:52px;text-align:right}
 .ddp-mx-extra{
   flex:0 0 auto;opacity:.6;margin-left:6px;
   transition:margin-left .3s;
@@ -1580,6 +1617,28 @@ window.__ModuleLoader__.load({
      * chip would occupy a neighbour's space for no information, which is the
      * whole reason the chip opts out of growing.
      */
+    // Fallback geometry for the SVG d attribute. The stylesheet's d wins at
+    // render time and is what actually interpolates between the two shapes;
+    // these strings keep the paths visible if a renderer ignores the CSS
+    // property, in which case the change degrades to a hard cut rather than to
+    // nothing at all. Both are M + four C segments on purpose.
+    const RING_D =
+      'M 6.5 1.25 C 9.4 1.25 11.75 3.6 11.75 6.5 C 11.75 9.4 9.4 11.75 6.5 11.75 C 3.6 11.75 1.25 9.4 1.25 6.5 C 1.25 3.6 3.6 1.25 6.5 1.25'
+    const BAR_D =
+      'M 2.5 6.5 C 22 6.5 42 6.5 61.5 6.5 C 61.5 6.5 61.5 6.5 61.5 6.5 C 61.5 6.5 61.5 6.5 61.5 6.5 C 61.5 6.5 61.5 6.5 61.5 6.5'
+
+    // The resting state. An idle session still owns the chip, so the three
+    // dots are what the ring collapses into and expands out of; without them
+    // the chip would blink out of the row and the transition would have no
+    // destination.
+    const IDLE_BRIEF = {
+      shape: 'dots',
+      percent: null,
+      rate: '',
+      tip: '空闲',
+      aria: { 'aria-valuetext': '空闲' },
+    }
+
     function InlineBar(props) {
       const settings = useSettings()
       const wantsInline = settings.display === 'inline' || settings.display === 'both'
@@ -1592,20 +1651,25 @@ window.__ModuleLoader__.load({
 
       // Hooks are all above this line: the early returns below must never change
       // the hook count between renders.
-      if (!settings.enabled || !wantsInline || !sessionId || !mine.length) return null
+      //
+      // An idle session keeps the chip. It used to bail out here, which made the
+      // dots unreachable — the resting state is the whole point of the ring
+      // having somewhere to collapse to.
+      if (!settings.enabled || !wantsInline || !sessionId) return null
 
       // Several calls in one session: the chip tracks the oldest, and a count
       // says how many others are queued behind it. Drawing a stacked bar for a
       // 22px row would say less than the number does.
       const head = mine[0]
-      const brief = briefOf(head)
+      const brief = head ? briefOf(head) : IDLE_BRIEF
       const extra = mine.length - 1
 
       const style = themeTokens(settings.theme) || undefined
 
-      // Every body is always mounted; the `ddp-mx--<shape>` class collapses the
-      // two that are not in use. See the CSS block for why (a mounted-but-zero
-      // body is what lets the width animate).
+      // One clipped viewBox holds both shapes. The wrapper's width is what
+      // changes (13px ring -> 64px bar); the paths inside morph by `d`, so the
+      // ring unrolls into the bar instead of two elements cross-fading.
+      const progress = brief.percent === null ? 0 : brief.percent / 100
       return h(
         'div',
         {
@@ -1616,17 +1680,32 @@ window.__ModuleLoader__.load({
           'aria-valuemin': 0,
           'aria-valuemax': 100,
           ...brief.aria,
-          title: brief.tip,
+          // No title attribute: the browser's native tooltip duplicates our own
+          // hover tip, paints in system chrome, and fades in and out on its own
+          // schedule. The aria values above already carry the number.
         },
         h(
           'span',
-          { className: 'ddp-mx-track' },
-          h('span', {
-            className: 'ddp-mx-fill',
-            style: { width: brief.percent === null ? '0%' : brief.percent.toFixed(1) + '%' },
-          }),
+          { className: 'ddp-mx-shape' },
+          h(
+            'svg',
+            { viewBox: '0 0 64 13', width: 64, height: 13, 'aria-hidden': 'true', focusable: 'false' },
+            h('path', { className: 'ddp-mx-arc', d: brief.shape === 'bar' ? BAR_D : RING_D }),
+            h('path', {
+              className: 'ddp-mx-prog',
+              d: brief.shape === 'bar' ? BAR_D : RING_D,
+              // The ring shows a short spinning arc (9 of its ~33 units); the
+              // bar shows the real fraction of the 59-unit run, rounded caps
+              // adding the last 5px on each end.
+              style: {
+                strokeDasharray:
+                  brief.shape === 'bar'
+                    ? (59 * progress).toFixed(2) + ' 200'
+                    : '9 24',
+              },
+            }),
+          ),
         ),
-        h('span', { className: 'ddp-mx-ring' }),
         h(
           'span',
           { className: 'ddp-mx-dots' },
