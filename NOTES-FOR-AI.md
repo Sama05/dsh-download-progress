@@ -5,7 +5,7 @@
 > 内容会随 DSH 版本漂移而失效，所以每条结论都尽量带上当时的证据形态，方便复核。
 
 - 包名：`@local/dsh-download-progress`
-- 版本：`0.1.0`
+- 版本：`0.1.1`
 - 运行位置：Host 半在 DSH 主进程，Client 半在 DSH Web UI 的渲染进程
 - 零外部依赖：只用 `node:fs` / `node:path`（Host 半）+ 宿主提供的 `react`（Client 半）
 - 许可证：MIT，见 [LICENSE](LICENSE)
@@ -536,6 +536,14 @@ DNS / TLS 握手，文件尚不存在。首个 tick 读到 0 字节就累加 `id
 
 三条修法都有断言：`stress-host.mjs` 里分别是 `30 minute ceiling`、
 `vanished file keeps its last size`、`not-yet-created target gets a start grace`。
+
+**⑤ 失败的 HEAD 被当成文件大小（`probeTotal` 没看 `res.ok`）**
+`probeTotal()` 用 HEAD 探总大小，原来只读 `content-length`。Cloudflare 会直接
+拒掉 HEAD 并返回 403，而错误页正文恰好 1 字节 ⇒ `content-length: 1` 被当成了
+文件总大小，卡片渲染成 `0 B / 1 B`。修法：`if (!res.ok) return`，非 2xx 一律
+保持 `total = null`（不确定进度条）。回归测试在 `smoke-host.mjs`，用本地 HTTP
+服务返回「403 + content-length: 1」断言 `total` 仍为 `null`；临时撤掉这行修复
+该测试会失败，恢复后通过。
 
 客户端侧另有一处容错（不是 bug 修复，是设计）：`POLL_FAILURES_BEFORE_CLEAR`
 允许连续多次轮询失败才清空列表，避免宿主重启、路由短暂 502 时浮层闪一下消失。

@@ -9,6 +9,7 @@
  *   node smoke-host.mjs
  */
 import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -192,6 +193,43 @@ try {
   ok('state: snapshot exposes the full wire contract')
 } finally {
   rmSync(dir, { recursive: true, force: true })
+}
+
+/* ------------------------------------------------------------------ */
+/* 5. a rejected HEAD must not become the file size                    */
+/* ------------------------------------------------------------------ */
+// Cloudflare (and plenty of other CDNs) answer HEAD with 403 and a one-byte
+// error body. Reading `content-length` without looking at the status made the
+// card render "0 B / 1 B" as if the download were one byte long. Only a 2xx
+// response describes the resource being downloaded.
+const server = createServer((req, res) => {
+  res.writeHead(403, { 'content-type': 'text/plain', 'content-length': '1' })
+  res.end('x')
+})
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+const port = server.address().port
+// The section above deletes its own temp directory, so this one needs its own.
+const headDir = mkdtempSync(join(tmpdir(), 'ddp-head-'))
+
+try {
+  const probed = beginTask(
+    { callId: 'call-head', name: 'pwsh' },
+    { kind: 'download', command: `curl -o "${join(headDir, 'blocked.bin')}" http://127.0.0.1:${port}/blocked.bin` },
+    headDir,
+  )
+  // probeTotal() is fire-and-forget, so let the HEAD land before asserting. A
+  // fixed wait is right here: the absence of a value is what is being tested, so
+  // polling for it would exit immediately.
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  assert.equal(
+    probed.total,
+    null,
+    'a 403 HEAD with content-length: 1 must leave total unknown, not report a one-byte file',
+  )
+  ok('state: a rejected HEAD probe leaves total unknown instead of trusting content-length')
+} finally {
+  await new Promise((resolve) => server.close(resolve))
+  rmSync(headDir, { recursive: true, force: true })
 }
 
 console.log('\nHOST SMOKE OK — utils, detect and state behave as documented')

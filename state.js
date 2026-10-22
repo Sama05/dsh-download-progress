@@ -132,6 +132,11 @@ export function beginTask(exec, plan, cwd) {
 async function probeTotal(url, task) {
   try {
     const res = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(6000) })
+    // A rejected HEAD still carries a body length — Cloudflare answers 403 with a
+    // one-byte error page, and `content-length: 1` would then be adopted as the
+    // file's size, leaving the card stuck on "0 B / 1 B". Only a successful
+    // response describes the resource we are actually downloading.
+    if (!res.ok) return
     const length = Number(res.headers.get('content-length'))
     if (Number.isFinite(length) && length > 0) task.total = length
   } catch {
