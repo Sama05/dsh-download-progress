@@ -154,7 +154,7 @@ client.js
 | 新任务的排列位置 | 最新在前 / 最新在后 | 最新在前 | 多条任务时最新出现的排顶部还是底部（`newest-first` 会把 Host 的插入顺序反转） |
 | 最多同时显示条数 | 1–6 | 3 | 通过 CSS 变量 `--ddp-rows` 控制 `max-height`，超出滚动 |
 | 主题 | 跟随系统 / 亮色 / 暗色 | 跟随系统 | 只作用于浮层。见 §3.2.4；新增主题只需在 `THEMES` 里加一项，下拉自动出现 |
-| 出现动画 | 上浮淡入 / CRT 开关机 / 水波纹 / 无动画 | 上浮淡入 | 浮层出现与收起时的动效。见 §3.2.5 |
+| 出现动画 | 上浮淡入 / CRT 开关机 / 水波纹 / 横向滑入 / 下落弹入 / 弹性放大 / 横扫揭示 / 翻折展开 / 旋转入位 / 模糊聚焦 / 无动画 | 上浮淡入 | 浮层出现与收起时的动效。见 §3.2.5 |
 | 浮层位置 | 拖动把手 / 拖动卡片 / 「重置位置」按钮 | 顶部居中（`y=76px`） | 位置不用下拉框选，直接拖 |
 
 配置存在 `localStorage['dsh-download-progress:settings']`，**不落 Host 配置文件**——
@@ -335,14 +335,32 @@ padding-box 里，向外扩散的部分被切成一个硬矩形——用户看�
 悬停百分比的 `.ddp-tip` 气泡向上弹出（`bottom: calc(100% + 6px)`），实测仍在卡片内部
 （tip 顶边 ≈ 卡片内 10px），不会被裁。悬停时卡片上抬 1px；拖动过程中 `.ddp-wrap--drag` 关掉这个上抬。
 
-**出现动画四选一**，**挂在每张卡片上**（`.ddp-card` 带 `ddp-ease-<id> ddp-anim--in|out`）：
+**出现动画十选一 + 无动画**，**挂在每张卡片上**（`.ddp-card` 带 `ddp-ease-<id> ddp-anim--in|out`）：
 
 | id | 设置项 | 效果 |
 | --- | --- | --- |
 | `float` | 上浮淡入（默认） | 淡入 + 上移 10px + 轻微缩放 |
 | `crt` | CRT 开关机 | 出现：从一条过曝的细亮线（`scaleY(.004)` + `brightness(2.6)`）纵向展开，过冲 6% 再回落；收起：反向压成亮线后消失 |
 | `ripple` | 水波纹 | 出现：卡片从 `scale(.94)` 弹性涨到 1，同时 `::after` 圆形波光从中心 `scale(.12)` 扩散到 2.2 并淡出；收起：缩到 `.96` 淡出 |
+| `slide` | 横向滑入 | 从左侧 16px 外滑入；收起向右 14px 淡出（唯一方向不对称的一种） |
+| `drop` | 下落弹入 | 从上方 14px 落下，回弹靠 `cubic-bezier(.34,1.42,.5,1)`；收起向上 10px 淡出 |
+| `pop` | 弹性放大 | 从 `scale(.86)` 弹到 1，回弹靠 `cubic-bezier(.2,1.5,.4,1)`；收起缩到 `.9` |
+| `wipe` | 横扫揭示 | `clip-path:inset(0 100% 0 0)` → `inset(0)` 硬边扫过，不淡入；收起反向扫掉 |
+| `flip` | 翻折展开 | `perspective(620px) rotateX(-74deg)` 翻下来，中途过冲 6deg；收起 `rotateX(58deg)` |
+| `spin` | 旋转入位 | `rotate(-8deg) scale(.9)` 螺旋归位；收起 `rotate(5deg) scale(.94)` |
+| `blur` | 模糊聚焦 | `filter:blur(9px)` + `scale(1.02)` 收成清晰；收起再糊掉 |
 | `none` | 无动画 | 直接出现 / 直接消失 |
+
+**新增一种动画要做两件事**：`ENTER_ANIMS` 表里加一行（`id` / `label` / `outMs`），
+CSS 里加一对 `.ddp-anim--in.ddp-ease-<id>` + `.ddp-anim--out.ddp-ease-<id>` 和对应
+`@keyframes ddp-<id>-in` / `-out`。`smoke.mjs` 会遍历下拉框里每个 id，**逐个断言
+「卡片拿到该类」+「CSS 有该规则」+「有该 @keyframes」**，所以漏任何一个都会当场红。
+下拉框是 11 项（10 种 + 无动画），`options !== 11` 也会红——加动画时记得同步改这个数字。
+
+**为什么新加的六种不用 `filter`**：卡片上的 `filter` 会创建新的 backdrop root，
+动画期间毛玻璃模糊失效（见下面的 CRT 瑕疵）。`slide`/`drop`/`pop`/`wipe`/`flip`/`spin`
+只用 `transform` 和 `clip-path`，玻璃全程保留；只有 `blur` 是明知故犯——它要的就是
+「从糊到清」那一下，玻璃重新聚焦正是效果本身。
 
 **水波纹怎么做的**：`::after` 是一个 `width:200%; aspect-ratio:1` 的圆，`radial-gradient(circle,
 var(--ddp-ripple) 0%, transparent 62%)`，平时 `opacity:0`，只有 `.ddp-ease-ripple::after` 播
@@ -352,8 +370,9 @@ var(--ddp-ripple) 0%, transparent 62%)`，平时 `opacity:0`，只有 `.ddp-ease
 
 `--ddp-ripple` 是波纹颜色（亮色偏蓝 `rgba(90,140,255,.24)`，暗色 `rgba(120,170,255,.22)`），主题可换。
 
-已知小瑕疵：CRT 用的 `filter` 会创建新的 backdrop root，动画那 300ms 内毛玻璃模糊会失效（卡片退化成
-纯半透明色）。时长极短，暂不处理。
+已知小瑕疵：`crt` 和 `blur` 两种用 `filter` 的动画会创建新的 backdrop root，动画期间
+（`crt` 约 300ms、`blur` 约 380ms）毛玻璃模糊会失效（卡片退化成纯半透明色）。时长极短，
+且 `blur` 的「重新聚焦」正是效果本身，暂不处理。
 
 **动画是逐条的，不是整个框一起动**——这是刻意的：
 
@@ -591,7 +610,9 @@ node smoke-host.mjs
 以及主题：**「跟随系统」不覆盖任何 `--ddp-*`**、**亮色/暗色设上对应 token**、
 **切回「跟随系统」把所有覆盖清掉**、**主题 token 不会盖掉 `top` 定位**、
 **localStorage 里的第三方主题会出现在下拉里、与内置重名的被丢弃、`--ddp-rows` 与非法值被过滤**，
-以及出现动画：**默认 `float`**、**下拉切到 `crt` / `ripple` / `none` 时每张卡片的 `ddp-ease-*` 类跟着变**、**动画类只在卡片上，容器不带**、**入场按 55ms 错峰**。
+以及出现动画：**默认 `float`**、**下拉切到任意 id（`crt` / `ripple` / `slide` / `drop` / `pop` /
+`wipe` / `flip` / `spin` / `blur` / `none`）时每张卡片的 `ddp-ease-*` 类跟着变**、**动画类只在卡片上，
+容器不带**、**入场按 55ms 错峰**。`smoke.mjs` 会遍历下拉框逐 id 断言这三件事，加新动画自动覆盖。
 改完 UI 跑一次就知道有没有改崩。
 
 `smoke-host.mjs` 则直接 import 三个 Host 模块（`utils.js` / `detect.js` / `state.js`，都不依赖宿主），

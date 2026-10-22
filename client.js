@@ -170,6 +170,105 @@ window.__ModuleLoader__.load({
   45%{transform:scale(1.01,.55);filter:brightness(1.5)}
   100%{opacity:0;transform:scale(.7,.004);filter:brightness(2.8)}
 }
+
+/* ---- six more feels, same one-class-per-card shape ------------------------
+   They stick to transform / clip-path on purpose. A filter on the card makes
+   it a new backdrop root, so the glass loses its blur for as long as the
+   animation runs (the CRT feel has always paid that price). Blur is the one
+   that spends it deliberately; everything else here keeps the pane intact. */
+
+/* Slide: enters from the left edge, leaves to the right — the only feel with a
+   directional bias, which is why its exit does not mirror its entry. */
+.ddp-anim--in.ddp-ease-slide{animation:ddp-slide-in .3s cubic-bezier(.2,.85,.25,1) backwards}
+.ddp-anim--out.ddp-ease-slide{animation:ddp-slide-out .22s ease-in forwards}
+@keyframes ddp-slide-in{
+  from{opacity:0;transform:translateX(-16px)}
+  to{opacity:1;transform:translateX(0)}
+}
+@keyframes ddp-slide-out{
+  from{opacity:1;transform:translateX(0)}
+  to{opacity:0;transform:translateX(14px)}
+}
+
+/* Drop: falls in from above. The bounce lives in the timing function rather than
+   the keyframes, so the card never overshoots its own top edge mid-flight. */
+.ddp-anim--in.ddp-ease-drop{animation:ddp-drop-in .34s cubic-bezier(.34,1.42,.5,1) backwards}
+.ddp-anim--out.ddp-ease-drop{animation:ddp-drop-out .2s ease-in forwards}
+@keyframes ddp-drop-in{
+  from{opacity:0;transform:translateY(-14px) scale(.99)}
+  to{opacity:1;transform:translateY(0) scale(1)}
+}
+@keyframes ddp-drop-out{
+  from{opacity:1;transform:translateY(0)}
+  to{opacity:0;transform:translateY(-10px)}
+}
+
+/* Pop: springs up from a shrunken state with a visible overshoot. */
+.ddp-anim--in.ddp-ease-pop{animation:ddp-pop-in .32s cubic-bezier(.2,1.5,.4,1) backwards}
+.ddp-anim--out.ddp-ease-pop{animation:ddp-pop-out .2s ease-in forwards}
+@keyframes ddp-pop-in{
+  from{opacity:0;transform:scale(.86)}
+  to{opacity:1;transform:scale(1)}
+}
+@keyframes ddp-pop-out{
+  from{opacity:1;transform:scale(1)}
+  to{opacity:0;transform:scale(.9)}
+}
+
+/* Wipe: a hard edge sweeps across and leaves the card in place — no fade, so the
+   first frame already reads as "this is arriving". The rounded corner still
+   clips it because the card itself is overflow:hidden. */
+.ddp-anim--in.ddp-ease-wipe{animation:ddp-wipe-in .34s cubic-bezier(.3,.9,.3,1) backwards}
+.ddp-anim--out.ddp-ease-wipe{animation:ddp-wipe-out .24s ease-in forwards}
+@keyframes ddp-wipe-in{
+  from{clip-path:inset(0 100% 0 0)}
+  to{clip-path:inset(0 0 0 0)}
+}
+@keyframes ddp-wipe-out{
+  from{clip-path:inset(0 0 0 0)}
+  to{clip-path:inset(0 0 0 100%)}
+}
+
+/* Flip: swings down from a tilted plane. perspective() sits inside the
+   transform so the origin stays at the card's own centre with no wrapper. */
+.ddp-anim--in.ddp-ease-flip{animation:ddp-flip-in .4s cubic-bezier(.25,.9,.3,1) backwards}
+.ddp-anim--out.ddp-ease-flip{animation:ddp-flip-out .26s ease-in forwards}
+@keyframes ddp-flip-in{
+  from{opacity:0;transform:perspective(620px) rotateX(-74deg)}
+  60%{opacity:1;transform:perspective(620px) rotateX(6deg)}
+  to{opacity:1;transform:perspective(620px) rotateX(0)}
+}
+@keyframes ddp-flip-out{
+  from{opacity:1;transform:perspective(620px) rotateX(0)}
+  to{opacity:0;transform:perspective(620px) rotateX(58deg)}
+}
+
+/* Spin: a short helical entry — the card rotates and scales at once, so it reads
+   as screwing into place rather than as a plain zoom. */
+.ddp-anim--in.ddp-ease-spin{animation:ddp-spin-in .36s cubic-bezier(.22,1.2,.34,1) backwards}
+.ddp-anim--out.ddp-ease-spin{animation:ddp-spin-out .22s ease-in forwards}
+@keyframes ddp-spin-in{
+  from{opacity:0;transform:rotate(-8deg) scale(.9)}
+  to{opacity:1;transform:rotate(0) scale(1)}
+}
+@keyframes ddp-spin-out{
+  from{opacity:1;transform:rotate(0) scale(1)}
+  to{opacity:0;transform:rotate(5deg) scale(.94)}
+}
+
+/* Blur: resolves out of a frosted haze. This is the feel that knowingly spends
+   the backdrop root — a wide blur radius animating is exactly what reads as
+   focus pulling, and the glass coming back into focus at the end is the point. */
+.ddp-anim--in.ddp-ease-blur{animation:ddp-blur-in .38s ease-out backwards}
+.ddp-anim--out.ddp-ease-blur{animation:ddp-blur-out .24s ease-in forwards}
+@keyframes ddp-blur-in{
+  from{opacity:0;filter:blur(9px);transform:scale(1.02)}
+  to{opacity:1;filter:blur(0);transform:scale(1)}
+}
+@keyframes ddp-blur-out{
+  from{opacity:1;filter:blur(0)}
+  to{opacity:0;filter:blur(7px)}
+}
 /* Frosted glass, iOS/macOS style: the blur is what makes the card read as a
    pane of glass, so the card itself is only a light translucent tint over
    whatever sits behind it. There is deliberately no specular corner bloom —
@@ -530,6 +629,13 @@ window.__ModuleLoader__.load({
       { id: 'float', label: '上浮淡入', outMs: 220 },
       { id: 'crt', label: 'CRT 开关机', outMs: 300 },
       { id: 'ripple', label: '水波纹', outMs: 260 },
+      { id: 'slide', label: '横向滑入', outMs: 220 },
+      { id: 'drop', label: '下落弹入', outMs: 200 },
+      { id: 'pop', label: '弹性放大', outMs: 200 },
+      { id: 'wipe', label: '横扫揭示', outMs: 240 },
+      { id: 'flip', label: '翻折展开', outMs: 260 },
+      { id: 'spin', label: '旋转入位', outMs: 220 },
+      { id: 'blur', label: '模糊聚焦', outMs: 240 },
       { id: 'none', label: '无动画', outMs: 0 },
     ]
 

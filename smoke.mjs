@@ -324,8 +324,8 @@ if (debugToggle.node.props.checked !== false)
 
 const easeSelect = selects.find((c) => c.node.props['aria-label'] === '出现动画')
 if (!easeSelect) throw new Error('settings page is missing the enter-animation dropdown')
-if (easeSelect.options !== 4)
-  throw new Error('enter-animation dropdown should list 4 feels, got ' + easeSelect.options)
+if (easeSelect.options !== 11)
+  throw new Error('enter-animation dropdown should list 11 feels, got ' + easeSelect.options)
 
 /* ---- debug mode off: no real tasks means the overlay renders nothing ---- */
 CANNED_TASKS = []
@@ -415,6 +415,37 @@ if (cardsOf(rippleTree).some((card) => !/ddp-ease-ripple/.test(card.props.classN
 easeSelect.node.props.onChange({ target: { value: 'none' } })
 if (!/ddp-ease-none/.test(cardClassOf(renderOverlay())))
   throw new Error('none feel must reach every card')
+
+/* Every feel the dropdown offers has to be wired at both ends: the card must
+   pick up its class, and the bundle must actually ship the keyframes. A feel
+   that is listed but has no @keyframes silently does nothing on screen, which
+   is exactly the failure a hand-written table invites. */
+const busyFeels = []
+const feelOptions = []
+;(function scan(node) {
+  if (!node || typeof node !== 'object') return
+  if (Array.isArray(node)) return node.forEach(scan)
+  if (node.type === 'option' && node.props && typeof node.props.value === 'string')
+    feelOptions.push(node.props.value)
+  if (node.props) scan(node.props.children)
+})(easeSelect.node.props.children)
+feelOptions.forEach((id) => {
+  if (id === 'none') return
+  easeSelect.node.props.onChange({ target: { value: id } })
+  const tree = renderOverlay()
+  if (!new RegExp('ddp-ease-' + id + '\\b').test(cardClassOf(tree)))
+    throw new Error('feel "' + id + '" is in the dropdown but never reaches a card')
+  if (cardsOf(tree).some((card) => !new RegExp('ddp-ease-' + id + '\\b').test(card.props.className)))
+    throw new Error('feel "' + id + '" must reach every card in the stack')
+  if (src.indexOf('.ddp-anim--in.ddp-ease-' + id) < 0)
+    throw new Error('feel "' + id + '" has no CSS rule, so it would animate nothing')
+  if (src.indexOf('@keyframes ddp-' + id + '-in') < 0)
+    throw new Error('feel "' + id + '" has no @keyframes ddp-' + id + '-in')
+  busyFeels.push(id)
+})
+if (busyFeels.length < 10)
+  throw new Error('expected at least 10 animated feels (plus none), got ' + busyFeels.length)
+console.log('  feels wired end to end:', busyFeels.join(' / '))
 easeSelect.node.props.onChange({ target: { value: 'float' } })
 console.log('  ok enter animation = ddp-ease-<id> per card, staggered, never on the list')
 
