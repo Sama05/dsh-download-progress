@@ -284,20 +284,31 @@ window.__ModuleLoader__.load({
 .ddp-group{
   flex:0 0 auto;display:flex;flex-direction:column;gap:8px;
   padding:6px 6px 8px;border-radius:14px;
-  /* Barely-there tint, so a group reads as a container without becoming a
-     second material on top of the glass cards. */
-  background:var(--ddp-group-bg,rgba(255,255,255,.045));
-  border:1px solid var(--ddp-group-border,rgba(255,255,255,.07));
+  /* A group is a plate, not a wash. At the old 4.5% tint the chat text behind
+     the overlay showed straight through the header row, so a session name that
+     already carried the primary foreground still read as doubled and faint —
+     the colour was fine, the backdrop was not. Same recipe as a card: the host
+     overlay colour cut with transparency, plus blur underneath, so the name has
+     something quiet to sit on. */
+  background:var(--ddp-group-bg,color-mix(in srgb,var(--dsw-alias-bg-overlay,rgba(32,32,36,.9)) 55%,transparent));
+  border:1px solid var(--ddp-group-border,rgba(255,255,255,.09));
+  -webkit-backdrop-filter:var(--ddp-group-glass,blur(16px) saturate(170%));
+  backdrop-filter:var(--ddp-group-glass,blur(16px) saturate(170%));
 }
 .ddp-group-head{
   display:flex;align-items:baseline;gap:8px;
-  padding:0 2px;font-size:11px;line-height:1.4;
+  padding:0 2px;font-size:11.5px;line-height:1.4;
   /* The session name is the whole point of a block, so it carries the PRIMARY
      foreground, not the dim one. On the glass material the dim token sat at
      roughly half contrast and the header was reported as too faint to read.
      --ddp-group-fg sits in front so a theme can tune the header on its own
      without touching any other text. */
   color:var(--ddp-group-fg,var(--ddp-fg,var(--dsw-alias-label-primary,#e8e8ea)));
+  /* A 1px dark halo under the name. Blur alone cannot fully separate 11px text
+     from whatever chat line happens to sit behind the overlay; the halo buys the
+     contrast back without brightening the plate. Themes set --ddp-group-shadow
+     to 'none' where a halo would smear (the light plate). */
+  text-shadow:var(--ddp-group-shadow,0 1px 2px rgba(0,0,0,.5));
 }
 .ddp-group-name{
   flex:1 1 auto;min-width:0;
@@ -477,6 +488,11 @@ window.__ModuleLoader__.load({
         '--ddp-ripple': 'rgba(90,140,255,.24)',
         '--ddp-chip-bg': 'rgba(0,0,0,.06)',
         '--ddp-chip-border': 'rgba(0,0,0,.14)',
+        // Light plate: near-white glass so the dark header text keeps contrast,
+        // and no halo — a dark shadow under dark text on white just smears.
+        '--ddp-group-bg': 'rgba(255,255,255,.55)',
+        '--ddp-group-border': 'rgba(0,0,0,.10)',
+        '--ddp-group-shadow': 'none',
       },
       dark: {
         '--ddp-accent': '#4c8dff',
