@@ -282,7 +282,7 @@ localStorage['dsh-download-progress:themes'] = JSON.stringify([
 - 键必须是 `--ddp-*`，且 `--ddp-rows`（布局变量）被**明确拒绝**，外部主题改不了排版；
 - 值与内置主题同一套变量名（`--ddp-accent` / `--ddp-fg` / `--ddp-fg-dim` / `--ddp-grip` /
   `--ddp-card-bg` / `--ddp-card-border` / `--ddp-track-bg` / `--ddp-pop-bg` / `--ddp-pop-border` /
-  `--ddp-scroll` / `--ddp-shadow` / `--ddp-inner-hi` / `--ddp-glass` /
+  `--ddp-scroll` / `--ddp-inner-hi` / `--ddp-glass` /
   `--ddp-sheen` / `--ddp-ripple` / `--ddp-chip-bg` / `--ddp-chip-border`）；
 - 与内置 id 重名的条目会被丢弃（内置优先）；值只接受 `#..`、`rgba(..)`、颜色名这类安全字符；
 - 不填的变量自动回落到宿主 `--dsw-alias-*`，所以**只写一两个变量也能用**。
@@ -296,15 +296,19 @@ localStorage['dsh-download-progress:themes'] = JSON.stringify([
 | --- | --- | --- | --- |
 | 半透明底 | `background: var(--ddp-card-bg, color-mix(in srgb, var(--dsw-alias-bg-overlay) 62%, transparent))` | `--ddp-card-bg` | 染色层。亮色压到 **0.26**、暗色 **0.40**，只为让背后的模糊透得出来 |
 | 模糊 + 饱和 | `backdrop-filter: var(--ddp-glass, blur(24px) saturate(180%))` | `--ddp-glass` | 玻璃的主体。亮色主题**不加** `brightness()`——那会把片子推向纸白；暗色保留 `1.06` |
-| 细边框 | `1px solid var(--ddp-card-border, var(--dsw-alias-border-l1))` | `--ddp-card-border` | 玻璃的"切边"。亮色 6% 黑、暗色 8% 白 |
-| 单层弥散影 | `var(--ddp-shadow, …)` | `--ddp-shadow` | 唯一的外阴影（亮 `0 10px 32px /.13`，暗 `0 12px 38px /.44`） |
-| 内顶亮线 | `inset 0 1px 0 var(--ddp-inner-hi, …)` | `--ddp-inner-hi` | 顶边一道细亮线，读作被光照到的玻璃上沿；这是唯一保留的内线 |
+| 细边框 | `1px solid var(--ddp-card-border, var(--dsw-alias-border-l1))` | `--ddp-card-border` | 玻璃的"切边"。亮色 10% 黑、暗色 12% 白；去掉外阴影后，边界感全靠这条线 |
+| 内顶亮线 | `inset 0 1px 0 var(--ddp-inner-hi, …)` | `--ddp-inner-hi` | 顶边一道细亮线，读作被光照到的玻璃上沿 |
+| 内底暗线 | `inset 0 -1px 0 var(--ddp-card-border, …)` | `--ddp-card-border` | 底边同色 1px，读作玻璃厚度；复用边框色，不额外引入变量 |
 | 顶部渐层 | `::before` 的 `linear-gradient(180deg, …)` | `--ddp-sheen` | 玻璃上沿略亮、到 46% 处淡出 |
 
-**曾经有两层被删掉了，别再往回加**：`0 1px 2px rgba(0,0,0,.10)` 接触影和
-`inset 0 -1px 0` 内底暗线。它们各自看都合理，但叠在带 `border-radius` 的半透明片上，
-会在四周画出一圈清晰的硬边环——用户的原话是"周围边框怎么有一圈阴影"。
-玻璃是靠弥散投影浮起来的，不是靠描一圈边。只保留内**顶**亮线：它是唯一不产生环状的层。
+**外投影已被彻底移除，别再往回加**。原因不是审美，是几何：`.ddp-list` 是滚动容器，
+必须是 `overflow-y:auto`，而滚动容器会对后代做 clip。卡片的 `box-shadow` 只能画在
+padding-box 里，向外扩散的部分被切成一个硬矩形——用户看到的就是"所有进度条背后还有一层盒子"。
+玻璃在这个结构下只能靠**模糊 + 边框**立起来，任何向外扩散的阴影都只能得到一个环或一个底板。
+当前 `box-shadow` 只剩两条 inset（上亮线 + 下暗线），`--ddp-shadow` 变量已删除
+（外部主题写了会被忽略，无害）；`.ddp-card:hover` 只 `translateY(-1px)`，不再重复声明阴影。
+
+`.ddp-list` 的 `padding` 为 `4px`：卡片之间靠自身边框分隔，不该贴着滚动视口边缘被切掉。
 
 亮色主题尤其容易翻车：`--ddp-card-bg` 一旦到 0.6 以上、再叠 `brightness(1.04)` 和
 0.42 的顶部渐层，就不会像玻璃，而像一张白卡片。当前三者的取值是 0.26 / 无提亮 / 0.14，

@@ -97,7 +97,9 @@ window.__ModuleLoader__.load({
     calc(100vh - 48px)
   );
   overflow-y:auto;overflow-x:hidden;
-  padding:2px;scrollbar-width:thin;
+  /* A little air on all sides: the cards are separated by their own border now,
+     so they must not sit flush against the scroll viewport edge. */
+  padding:4px;scrollbar-width:thin;
   cursor:grab;
 }
 .ddp-list:active{cursor:grabbing}
@@ -180,12 +182,12 @@ window.__ModuleLoader__.load({
   background:var(--ddp-card-bg,color-mix(in srgb,var(--dsw-alias-bg-overlay,rgba(32,32,36,.9)) 62%,transparent));
   border:1px solid var(--ddp-card-border,var(--dsw-alias-border-l1,rgba(255,255,255,.10)));
   border-radius:12px;padding:8px 10px;
-  /* One diffuse drop only. The contact shadow and the inset bottom shade that
-     used to sit here read as a hard ring traced around the card; real frosted
-     glass floats on a soft pool of light, it is not outlined. The lit top edge
-     stays — it is the one highlight that makes the pane look like a surface. */
+  /* No outer drop shadow, by design: the list is a scroll container whose
+     overflow clips descendants, so a cast shadow would be sliced into a hard
+     rectangle at its padding-box — a faint panel behind the stack. Glass
+     separates by blur and border, never by a shadow it cannot show. */
   box-shadow:
-    var(--ddp-shadow,0 8px 30px rgba(0,0,0,.30)),
+    inset 0 -1px 0 var(--ddp-card-border,rgba(255,255,255,.10)),
     inset 0 1px 0 var(--ddp-inner-hi,rgba(255,255,255,.12));
   font-size:12px;line-height:1.45;
   color:var(--ddp-fg,var(--dsw-alias-label-primary,#e8e8ea));
@@ -217,12 +219,9 @@ window.__ModuleLoader__.load({
   background:radial-gradient(circle,var(--ddp-ripple,rgba(120,170,255,.26)) 0%,transparent 62%);
 }
 .ddp-card > *{position:relative;z-index:1}
-.ddp-card:hover{
-  transform:translateY(-1px);
-  box-shadow:
-    var(--ddp-shadow,0 8px 30px rgba(0,0,0,.30)),
-    inset 0 1px 0 var(--ddp-inner-hi,rgba(255,255,255,.12));
-}
+/* Hover only lifts. It must not change the shading: the shadow is inset now, so
+   re-stating it here would be a no-op that implies an outer glow exists. */
+.ddp-card:hover{transform:translateY(-1px)}
 /* While dragging the whole stack, a per-card hover lift would fight the gesture. */
 .ddp-wrap--drag .ddp-card:hover{transform:none}
 .ddp-row{display:flex;align-items:baseline;gap:10px}
@@ -426,13 +425,11 @@ window.__ModuleLoader__.load({
         // it supplies the rest of the material. Held low on purpose — at .66 this
         // read as a white card with a blurry feel, not as glass over the page.
         '--ddp-card-bg': 'rgba(255,255,255,.26)',
-        '--ddp-card-border': 'rgba(0,0,0,.06)',
+        '--ddp-card-border': 'rgba(0,0,0,.10)',
         '--ddp-track-bg': 'rgba(0,0,0,.10)',
         '--ddp-pop-bg': '#ffffff',
         '--ddp-pop-border': 'rgba(0,0,0,.14)',
         '--ddp-scroll': 'rgba(0,0,0,.18)',
-        // One diffuse drop, no contact shadow: that is what removes the ring.
-        '--ddp-shadow': '0 10px 32px rgba(15,23,42,.13)',
         '--ddp-inner-hi': 'rgba(255,255,255,.55)',
         // No brightness lift in light mode: it pushed the pane toward paper white.
         '--ddp-glass': 'blur(24px) saturate(180%)',
@@ -447,12 +444,11 @@ window.__ModuleLoader__.load({
         '--ddp-fg': '#e8e8ea',
         '--ddp-fg-dim': '#a8a8b0',
         '--ddp-card-bg': 'rgba(28,28,32,.40)',
-        '--ddp-card-border': 'rgba(255,255,255,.08)',
+        '--ddp-card-border': 'rgba(255,255,255,.12)',
         '--ddp-track-bg': 'rgba(255,255,255,.13)',
         '--ddp-pop-bg': '#2a2a30',
         '--ddp-pop-border': 'rgba(255,255,255,.14)',
         '--ddp-scroll': 'rgba(255,255,255,.18)',
-        '--ddp-shadow': '0 12px 38px rgba(0,0,0,.44)',
         '--ddp-inner-hi': 'rgba(255,255,255,.13)',
         '--ddp-glass': 'blur(24px) saturate(180%) brightness(1.06)',
         '--ddp-sheen': 'rgba(255,255,255,.08)',
