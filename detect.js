@@ -36,21 +36,61 @@ export const SHELL_TOOLS = new Set(['pwsh', 'bash', 'shell', 'terminal_send'])
 /* ------------------------------------------------------------------ */
 
 /**
- * A downloader invoked as a command.
- * `curl` gains an extension on Windows, the command may be chained with `&&`,
- * `;` or `|`, and it is often wrapped as `pwsh -c "curl -o …"` — so the match is
- * anchored on any shell separator OR an opening quote, not on whitespace alone.
+ * Where one command ends and the next begins.
+ *
+ * Shell separators are the obvious half. Quotes are in here too, on purpose:
+ * `pwsh -c "curl -o x y"` then yields a segment that begins with `curl`, while
+ * `Write-Host "use curl -o f u"` yields one that begins with `use`. That is the
+ * whole distinction between *running* a downloader and merely mentioning one —
+ * and getting it wrong is what used to raise a progress card for
+ * `Get-Process curl` or for the word `curl` inside a comment.
  */
-export const CURL_WGET_RE =
-  /(?:^|[\s;&|("'\x60])(curl(?:\.exe)?|wget(?:\.exe)?)(?=[\s;&|)"'\x60]|$)/i
+const SEGMENT_SPLIT_RE = /[;&|\n(){}"'`]/
 
-/** PowerShell's Invoke-WebRequest (or its alias). */
-export const IWR_RE = /(?:^|[\s;&|("'\x60])(Invoke-WebRequest|iwr)(?=[\s;&|)"'\x60]|$)/i
+/** A downloader standing at the head of its segment, not mid-argument. */
+const DOWNLOADER_HEAD_RE = /^(?:curl|wget)(?:\.exe)?(?=$|[\s,;&|)])/i
+
+/** `Invoke-WebRequest` (or `iwr`) at the head of its segment. */
+const IWR_HEAD_RE = /^(?:Invoke-WebRequest|iwr)(?=$|[\s,;&|)])/i
+
+/**
+ * Split a command line into the segments that could each be an invocation.
+ *
+ * A leading `&` (PowerShell's call operator) or `\` is dropped so `& curl …`
+ * still reads as a downloader. Nothing else is rewritten: the point is only to
+ * find where a command *starts*.
+ *
+ * @param {string} command
+ * @returns {string[]}
+ */
+export function commandSegments(command) {
+  return text(command)
+    .split(SEGMENT_SPLIT_RE)
+    .map((segment) => segment.trim().replace(/^[&\\]+/, ''))
+    .filter(Boolean)
+}
+
+/**
+ * `git clone`, allowing flags between the two words (`git -C dir clone …`).
+ *
+ * The `clone` word must follow whitespace, so `git log --grep=clone` stays a
+ * log command instead of being mistaken for a download.
+ *
+ * @param {string} segment
+ */
+function isGitClone(segment) {
+  return /^(?:git|git\.exe)(?=$|[\s])/i.test(segment) && /(?:^|\s)clone(?=\s|$)/i.test(segment)
+}
 
 /** `-OutFile` is what turns an Invoke-WebRequest into something sampleable. */
 export const PS_OUTFILE_RE = /(?:^|\s)-OutFile(?=\s)/i
 
-export const GIT_CLONE_RE = /\bgit\s+clone\b/i
+/**
+ * Where `git clone` starts, for slicing out its positional arguments.
+ * Deliberately looser than {@link isGitClone}: this only locates the command, it
+ * never decides whether a card is raised.
+ */
+export const GIT_CLONE_RE = /\bgit\b[^|;&]*?\bclone\b/i
 
 /** Package managers that stream a known amount of traffic into a cache. */
 export const PKG_RE =
@@ -79,6 +119,22 @@ const PS_OUTFILE_ARG_RE = /(?:^|\s)-OutFile\s+("([^"]+)"|'([^']+)'|(\S+))/gi
 const CURL_REMOTE_NAME_RE = /(?:^|\s)(?:-O|--remote-name)(?=\s|$)/
 
 /**
+ * wget's `-O` means "write to this file", which is the *opposite* of curl's `-O`.
+ * Treating the two the same used to put `wget -O out.bin …` on a card watching
+ * the URL's own basename — a file the transfer never touches.
+ *
+ * The `--output-document=path` spelling is left alone on purpose: it is rare,
+ * and a half-parsed flag would be worse than the honest "unresolved".
+ */
+const WGET_OUTFILE_RE = /(?:^|\s)(?:-O|--output-document)\s+("([^"]+)"|'([^']+)'|(\S+))/g
+
+/** Flags that name the file a downloader writes. */
+const OUTFILE_FLAGS = new Set(['-o', '--output', '--output-document', '-outfile'])
+
+/** `-ArgumentList …` / `-Args …`: the array form hides the flag behind commas. */
+const ARG_LIST_RE = /-(?:ArgumentList|Args)\s+/i
+
+/**
  * Pull the path out of every match of a flag pattern.
  * Uses `matchAll` rather than a shared `.exec()` loop: a `/g` regex carries
  * `lastIndex` between calls, and a module-level constant reused across calls
@@ -93,6 +149,49 @@ function flagValues(command, pattern) {
   for (const match of command.matchAll(pattern)) {
     const value = match[2] || match[3] || match[4]
     if (value) out.push(value)
+  }
+  return out
+}
+
+/**
+ * Split a PowerShell argument list into tokens.
+ *
+ * `Start-Process -ArgumentList '-L','-o','out.bin','https://…'` hands the child
+ * process an array; the `-o` and its value are two comma-separated items, so the
+ * whitespace-anchored flag regexes cannot see them. Quoted and bare tokens are
+ * both accepted.
+ *
+ * @param {string} value text after `-ArgumentList`
+ * @returns {string[]}
+ */
+function psArrayTokens(value) {
+  const tokens = []
+  for (const match of value.matchAll(/'([^']*)'|"([^"]*)"|([^,\s]+)/g)) {
+    const token = match[1] ?? match[2] ?? match[3]
+    if (token !== undefined) tokens.push(token)
+  }
+  return tokens
+}
+
+/**
+ * Output paths named inside a PowerShell `-ArgumentList`.
+ *
+ * Only the flag-then-value shape is recovered; anything else stays unresolved,
+ * for the same reason a `$variable` target does.
+ *
+ * @param {string} command
+ * @returns {string[]} raw, still-quoted tokens
+ */
+function argListTargets(command) {
+  const out = []
+  const match = ARG_LIST_RE.exec(command)
+  if (!match) return out
+  const tokens = psArrayTokens(command.slice(match.index + match[0].length))
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (!OUTFILE_FLAGS.has(tokens[i].toLowerCase())) continue
+    const next = tokens[i + 1]
+    if (next !== undefined) out.push(next)
+    i += 1
   }
   return out
 }
@@ -126,10 +225,19 @@ export function extractTargets(command, cwd) {
 
   for (const value of flagValues(source, CURL_OUTFILE_RE)) push(value)
   for (const value of flagValues(source, PS_OUTFILE_ARG_RE)) push(value)
+  for (const value of argListTargets(source)) push(value)
+
+  // `-O` is read differently per downloader, so the head of the command decides
+  // which flag table applies.
+  const heads = commandSegments(source)
+  const hasCurl = heads.some((segment) => /^curl(?:\.exe)?(?=$|[\s,;&|)])/i.test(segment))
+  const hasWget = heads.some((segment) => /^wget(?:\.exe)?(?=$|[\s,;&|)])/i.test(segment))
+
+  if (hasWget) for (const value of flagValues(source, WGET_OUTFILE_RE)) push(value)
 
   // `-O` takes the name from the URL, which is the only way to know the target
-  // before the transfer starts.
-  if (CURL_REMOTE_NAME_RE.test(source)) {
+  // before the transfer starts. curl only: see WGET_OUTFILE_RE above.
+  if (hasCurl && CURL_REMOTE_NAME_RE.test(source)) {
     const url = extractUrl(source)
     if (url) {
       try {
@@ -229,8 +337,17 @@ export function classify(exec) {
 
   // Invoke-WebRequest WITHOUT -OutFile buffers the page in memory: there is no
   // file to sample, so it must not be mistaken for a download.
-  const writesFile = IWR_RE.test(scan) && PS_OUTFILE_RE.test(scan)
-  if (CURL_WGET_RE.test(scan) || GIT_CLONE_RE.test(scan) || writesFile) {
+  //
+  // Every test below runs on a *segment head*, never on the raw command line: a
+  // downloader only counts when it is the thing being run. Testing the whole
+  // line is what used to raise a card for `Get-Process curl`, for `# curl …` in
+  // a comment, and for `Write-Host "use curl -o f u"` — none of which transfer
+  // a byte, so each one left a card that could never move.
+  const segments = commandSegments(scan)
+  const runsDownloader = segments.some((segment) => DOWNLOADER_HEAD_RE.test(segment))
+  const runsClone = segments.some(isGitClone)
+  const writesFile = segments.some((segment) => IWR_HEAD_RE.test(segment)) && PS_OUTFILE_RE.test(scan)
+  if (runsDownloader || runsClone || writesFile) {
     return { kind: 'download', command }
   }
   if (PKG_RE.test(scan)) return { kind: 'pkg', command }

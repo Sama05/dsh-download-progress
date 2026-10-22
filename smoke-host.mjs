@@ -76,6 +76,17 @@ assert.equal(shell('npm i -g foo').kind, 'pkg')
 assert.equal(shell('docker pull nginx').kind, 'pkg')
 assert.equal(shell('ls -la'), null)
 assert.equal(shell(''), null)
+// The word `curl` is not a download. Every one of these used to raise a card
+// that could never move, because the match was anchored on whitespace instead
+// of on the start of a command.
+assert.equal(shell('Get-Process curl -ErrorAction SilentlyContinue | Measure-Object'), null)
+assert.equal(shell('# curl is not installed here\nWrite-Host hi'), null)
+assert.equal(shell('Write-Host "use curl -o file url"'), null)
+assert.equal(shell('git log --grep=clone'), null)
+// Wrapped invocations still count: the quote boundary makes the inner command
+// its own segment.
+assert.equal(shell('pwsh -c "curl -o C:\\tmp\\c.bin https://x/c.bin"').kind, 'download')
+assert.equal(shell('a && curl -o out.bin https://x/y').kind, 'download')
 // A non-shell tool is never inspected for a command line.
 assert.equal(classify({ name: 'read', arguments: { file_path: 'x' } }), null)
 ok('detect: classify covers download / install / pkg / search / fetch / ignore')
@@ -107,6 +118,20 @@ assert.equal(extractTargets('curl -o a.bin --output a.bin https://x/y', CWD).len
 // documented limitation, not a bug: guessing would put a confident bar on a file
 // we are not actually watching.
 assert.deepEqual(extractTargets('curl -o $dst https://x/y', CWD), [join('D:\\work', '$dst')])
+// wget's `-O` names the output file; curl's `-O` names it after the URL. Reading
+// them the same way pointed the card at a file the transfer never writes.
+assert.deepEqual(extractTargets('wget -O out.bin https://x/y.bin', CWD), [
+  join('D:\\work', 'out.bin'),
+])
+// `Start-Process -ArgumentList` hands the child an array, so `-o` and its value
+// are separate comma-delimited items that the whitespace-anchored flags miss.
+assert.deepEqual(
+  extractTargets(
+    "Start-Process -FilePath 'curl.exe' -ArgumentList '-L','-o','D:\\work\\p.bin','https://x/p.bin'",
+    CWD,
+  ),
+  ['D:\\work\\p.bin'],
+)
 ok('detect: extractTargets handles quotes, cwd, -O, clone, dedupe, variables')
 
 /* ------------------------------------------------------------------ */
