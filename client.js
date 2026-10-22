@@ -292,12 +292,17 @@ window.__ModuleLoader__.load({
 .ddp-group-head{
   display:flex;align-items:baseline;gap:8px;
   padding:0 2px;font-size:11px;line-height:1.4;
-  color:var(--ddp-fg-dim,var(--dsw-alias-label-secondary,#a8a8b0));
+  /* The session name is the whole point of a block, so it carries the PRIMARY
+     foreground, not the dim one. On the glass material the dim token sat at
+     roughly half contrast and the header was reported as too faint to read.
+     --ddp-group-fg sits in front so a theme can tune the header on its own
+     without touching any other text. */
+  color:var(--ddp-group-fg,var(--ddp-fg,var(--dsw-alias-label-primary,#e8e8ea)));
 }
 .ddp-group-name{
   flex:1 1 auto;min-width:0;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  font-weight:500;
+  font-weight:600;
 }
 /* A session with several calls in flight: the count is the only cue that the
    block holds more than the one card the header sits above. */
@@ -429,6 +434,10 @@ window.__ModuleLoader__.load({
       showSpeed: true,
       maxVisible: 3,
       order: 'newest-first',
+      // Off = the stacked list every session reports into, which is what the
+      // overlay did before session blocks existed. On = only the session the
+      // main view is showing, so switching sessions switches the progress too.
+      currentOnly: false,
       // Off by default: sample cards must never be mistaken for a real download.
       debugMode: false,
       theme: 'auto',
@@ -619,6 +628,8 @@ window.__ModuleLoader__.load({
         maxVisible:
           Number.isFinite(rows) && rows >= 1 && rows <= 6 ? rows : DEFAULTS.maxVisible,
         order: ORDERS.indexOf(src.order) >= 0 ? src.order : DEFAULTS.order,
+        currentOnly:
+          typeof src.currentOnly === 'boolean' ? src.currentOnly : DEFAULTS.currentOnly,
         debugMode:
           typeof src.debugMode === 'boolean' ? src.debugMode : DEFAULTS.debugMode,
         theme: themeExists(src.theme) ? src.theme : DEFAULTS.theme,
@@ -1009,6 +1020,64 @@ window.__ModuleLoader__.load({
       return runs
     }
 
+    /* ---------------- current-session scope ---------------- */
+
+    /**
+     * The session the main view is showing right now, or '' when no session
+     * occupies it.
+     *
+     * The centre column renders the session whose `retainedBy.mainView` is set;
+     * that is the same projection the shipped title/sidebar code reads, so this
+     * follows the user's session switch without any host change. A right-hand
+     * panel (file browser, terminal…) owns the main key instead, and in that
+     * position no session is "current" — returning '' there makes the overlay
+     * fall back to the full list rather than go blank.
+     *
+     * @param {object} state `useSessions` snapshot
+     * @returns {string}
+     */
+    function mainSessionIdOf(state) {
+      const byId = (state && state.byId) || {}
+      for (const id of Object.keys(byId)) {
+        const row = byId[id]
+        if (!row) continue
+        const held = row.retainedBy && (row.retainedBy.mainView ?? 0) > 0
+        if (held) return String(row.id || id)
+      }
+      return ''
+    }
+
+    /** Selector form, so the overlay only re-renders when the session changes. */
+    function selectMainSessionId(state) {
+      return mainSessionIdOf(state)
+    }
+
+    /** Stand-in when the slot hands no session hook over (offline smoke test). */
+    function noSessions() {
+      return ''
+    }
+
+    /**
+     * Drop every row that belongs to another session.
+     *
+     * Only applied when the user asked for the current session AND that session
+     * is actually known: a blank scope keeps the full list, because hiding every
+     * download with no way to see why would look like the plugin broke. Rows
+     * without a session id (an older host) are kept for the same reason — they
+     * cannot be attributed, so they are never the reason something disappears.
+     *
+     * @param {object[]} list
+     * @param {string} sessionId
+     * @returns {object[]}
+     */
+    function scopeToSession(list, sessionId) {
+      if (!sessionId) return list
+      return list.filter((task) => {
+        const own = sessionKeyOf(task)
+        return !own || own === sessionId
+      })
+    }
+
     /** One session block: a name header plus that session's cards. */
     function Group(props) {
       const run = props.run
@@ -1134,23 +1203,43 @@ window.__ModuleLoader__.load({
       }, LEAVE_GRACE_MS)
     }
 
-    function Overlay() {
+    function Overlay(props) {
       const settings = useSettings()
       const liveTasks = useTasks(settings.enabled)
+
+      // The session the centre column is showing. Called unconditionally and
+      // from a stable prop, so the hook order never changes between renders —
+      // a conditional hook here would kill the overlay permanently.
+      const useSessions = (props && props.useSessions) || noSessions
+      const currentSessionId = useSessions(selectMainSessionId)
+
+      // "Current session only" is a display filter, applied before anything
+      // else looks at the rows, so the grouping / height / row-cap logic below
+      // sees exactly what will be painted and needs no second code path.
+      const scoped = settings.currentOnly
+        ? scopeToSession(liveTasks, currentSessionId)
+        : liveTasks
 
       // Peeking = the pointer is on the handle / the expanded list. Only allowed
       // when nothing real is in flight, so samples can never sit next to real rows.
       const [peeking, setPeeking] = React.useState(() => peekState.on)
       // Only a well-formed row counts as a real download. An array of nulls must
       // not suppress the sample cards and then paint an empty overlay.
-      const hasReal = liveTasks.some((task) => task && typeof task === 'object')
+      const realTasks = (Array.isArray(scoped) ? scoped : []).filter(
+        (task) => task && typeof task === 'object',
+      )
+      const hasReal = realTasks.length > 0
+      // A download in ANOTHER session still counts for one thing only: it keeps
+      // the sample workbench off. Otherwise scoping to a quiet session would
+      // summon five fake cards while a real transfer runs next door.
+      const hasAnyReal = liveTasks.some((task) => task && typeof task === 'object')
       // Sample cards exist only as a UI workbench. With debug mode off the overlay
       // shows nothing but real downloads, so a placeholder can never be mistaken
       // for an actual transfer.
       const canPeek = settings.debugMode
 
-      const samples = useSampleTasks(peeking && !hasReal && canPeek, peekState.at)
-      const tasks = hasReal ? liveTasks : samples
+      const samples = useSampleTasks(peeking && !hasAnyReal && canPeek, peekState.at)
+      const tasks = hasReal ? realTasks : samples
 
       // Turning debug mode off must not leave a pending collapse or a stale peek
       // session behind, or the samples would pop back the next time it is enabled.
@@ -1504,6 +1593,12 @@ window.__ModuleLoader__.load({
           hint: '打开后，没有真实下载时浮层会显示一条可拖动的把手；鼠标移到把手上会展开 5 张模拟卡片，用来调 UI。关闭后只显示真实下载，没有任何占位内容。',
           checked: settings.debugMode,
           onChange: (next) => set({ debugMode: next }),
+        }),
+        toggleRow({
+          label: '只看当前会话的下载',
+          hint: '关闭（默认）：所有会话的下载按会话分块，堆叠在同一个浮层里。打开：只显示当前正打开的会话的下载，切换到别的会话就跟着换成那个会话的进度。当前会话没有下载时浮层不显示。',
+          checked: settings.currentOnly,
+          onChange: (next) => set({ currentOnly: next }),
         }),
         selectRow({
           label: '新任务的排列位置',

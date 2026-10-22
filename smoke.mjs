@@ -303,7 +303,7 @@ console.log('\ncontrols:', JSON.stringify(controls.map((c) => ({ kind: c.kind, t
 const checkboxes = controls.filter((c) => c.kind === 'input' && c.type === 'checkbox')
 const selects = controls.filter((c) => c.kind === 'select')
 const buttons = controls.filter((c) => c.kind === 'button')
-if (checkboxes.length !== 3) throw new Error('expected 3 checkboxes, got ' + checkboxes.length)
+if (checkboxes.length !== 4) throw new Error('expected 4 checkboxes, got ' + checkboxes.length)
 if (selects.length !== 4) throw new Error('expected 4 selects, got ' + selects.length)
 if (buttons.length !== 1) throw new Error('expected the reset-position button')
 if (!selects.some((c) => c.node.props['aria-label'] === '排列顺序' && c.options === 2))
@@ -332,9 +332,19 @@ CANNED_TASKS = []
 const overlaySlot = registrations.find((r) => r.spec.name === 'shell.overlay')
 
 const hookCounts = []
-function renderOverlay() {
+// The overlay reads the current session through the `useSessions` standard
+// prop. The smoke harness supplies its own selector hook and flips the snapshot
+// below, which is how "the user switched session" is simulated offline.
+let SESSIONS = { byId: {} }
+function fakeUseSessions(selector) {
+  React.__hooks += 1
+  return selector(SESSIONS)
+}
+function renderOverlay(props) {
   React.__hooks = 0
-  const tree = overlaySlot.component({ close: () => {} })
+  const tree = overlaySlot.component(
+    Object.assign({ close: () => {}, useSessions: fakeUseSessions }, props),
+  )
   const count = React.__hooks
   if (hookCounts.length && hookCounts[0] !== count)
     throw new Error(
@@ -621,7 +631,103 @@ if (findByClass(sampleTree, 'ddp-group').length)
   throw new Error('sample cards have no session and must render as the flat list')
 console.log('  ok debug peek = flat samples, no invented session blocks')
 
-/* ---- dragging the grip must move the wrapper, not the grip ---- */
+/* ---- current-session scope: only the session the main view shows ---- */
+// Two sessions with one download each, plus the session snapshot the overlay
+// reads through `useSessions`. Switching the snapshot IS a session switch.
+const TWO_SESSIONS = [
+  { id: 'q1', kind: 'download', label: 'x.bin', bytes: 10, total: 100, speed: 5, elapsedMs: 1000, sessionId: 'sess-aaaa1111', sessionTitle: '整理素材库' },
+  { id: 'q2', kind: 'download', label: 'y.bin', bytes: 20, total: 100, speed: 5, elapsedMs: 1000, sessionId: 'sess-bbbb2222', sessionTitle: '打包发行版' },
+]
+const scopeToggle = checkboxes.find((c) => c.node.props['aria-label'] === '只看当前会话的下载')
+if (!scopeToggle) throw new Error('settings page is missing the current-session toggle')
+if (scopeToggle.node.props.checked !== false)
+  throw new Error('the current-session scope must default to off, so the stacked list stays the default')
+
+CANNED_TASKS = TWO_SESSIONS
+SESSIONS = { byId: { 'sess-bbbb2222': { id: 'sess-bbbb2222', retainedBy: { mainView: 1 } } } }
+scopeToggle.node.props.onChange({ target: { checked: true } })
+const scopedTree = renderOverlay()
+const scopedNames = findByClass(scopedTree, 'ddp-name').map((n) => n.props.children)
+console.log('\ncurrentOnly on, main view = 打包发行版: cards =', scopedNames.length,
+  '| names =', JSON.stringify(scopedNames),
+  '| groups =', findByClass(scopedTree, 'ddp-group').length)
+if (scopedNames.length !== 1 || scopedNames[0] !== 'y.bin')
+  throw new Error('the current-session scope must hide other sessions, got ' + JSON.stringify(scopedNames))
+if (findByClass(scopedTree, 'ddp-group').length)
+  throw new Error('one visible session must stay a flat list, no block')
+if (scopedTree.props.style['--ddp-heads'] !== '0px')
+  throw new Error('a scoped single session must reserve no header height, got ' + scopedTree.props.style['--ddp-heads'])
+console.log('  ok scoped = only the open session, still flat, no header height')
+
+// Switching session swaps the progress: same tasks, other session on screen.
+SESSIONS = { byId: { 'sess-aaaa1111': { id: 'sess-aaaa1111', retainedBy: { mainView: 1 } } } }
+const switchedTree = renderOverlay()
+const switchedNames = findByClass(switchedTree, 'ddp-name').map((n) => n.props.children)
+console.log('  switched to 整理素材库: cards =', JSON.stringify(switchedNames))
+if (switchedNames.length !== 1 || switchedNames[0] !== 'x.bin')
+  throw new Error('switching session must switch the shown progress, got ' + JSON.stringify(switchedNames))
+console.log('  ok switching session swaps the visible progress')
+
+// Three sessions downloading at once: the open one still gets the whole overlay.
+CANNED_TASKS = TWO_SESSIONS.concat([
+  { id: 'q3', kind: 'download', label: 'z.bin', bytes: 30, total: 100, speed: 5, elapsedMs: 1000, sessionId: 'sess-cccc3333', sessionTitle: '清理缓存' },
+])
+const threeTree = renderOverlay()
+const threeNames = findByClass(threeTree, 'ddp-name').map((n) => n.props.children)
+console.log('  three sessions, scoped: cards =', JSON.stringify(threeNames))
+if (threeNames.length !== 1 || threeNames[0] !== 'x.bin')
+  throw new Error('three concurrent sessions must still show only the open one, got ' + JSON.stringify(threeNames))
+
+// A right-hand panel owns the main key, so no session is current. Falling back
+// to the full list beats going blank with downloads visibly running.
+SESSIONS = { byId: { 'sess-aaaa1111': { id: 'sess-aaaa1111', retainedBy: {} } } }
+const noSessionTree = renderOverlay()
+console.log('  no current session: cards =', findByClass(noSessionTree, 'ddp-card').length,
+  '| groups =', findByClass(noSessionTree, 'ddp-group').length)
+if (findByClass(noSessionTree, 'ddp-card').length !== 3)
+  throw new Error('an unknown current session must fall back to the full list, not hide everything')
+console.log('  ok unknown current session = full list, never a blank overlay')
+
+// A row with no session id (older host) cannot be attributed, so it is kept.
+CANNED_TASKS = TWO_SESSIONS.concat([
+  { id: 'q4', kind: 'download', label: 'legacy.bin', bytes: 40, total: 100, speed: 5, elapsedMs: 1000 },
+])
+SESSIONS = { byId: { 'sess-aaaa1111': { id: 'sess-aaaa1111', retainedBy: { mainView: 1 } } } }
+const legacyNames = findByClass(renderOverlay(), 'ddp-name').map((n) => n.props.children)
+console.log('  scoped + unattributed row: cards =', JSON.stringify(legacyNames))
+if (legacyNames.indexOf('legacy.bin') < 0)
+  throw new Error('a row without a session id must never be filtered out, got ' + JSON.stringify(legacyNames))
+console.log('  ok rows without a session id survive the scope')
+
+// Off again: both sessions come back as blocks, exactly as before the feature.
+CANNED_TASKS = TWO_SESSIONS
+SESSIONS = { byId: {} }
+scopeToggle.node.props.onChange({ target: { checked: false } })
+const unscopedTree = renderOverlay()
+console.log('  currentOnly off: groups =', findByClass(unscopedTree, 'ddp-group').length,
+  '| cards =', findByClass(unscopedTree, 'ddp-card').length)
+if (findByClass(unscopedTree, 'ddp-group').length !== 2)
+  throw new Error('turning the scope off must restore the stacked per-session blocks')
+console.log('  ok scope off = the stacked list again')
+
+/* ---- the session name must be legible, not the dim token ---- */
+// Reported bug: the block header was almost invisible on the glass material.
+// The header now reads the primary foreground; a dim token there is the bug.
+const groupHeadRule = (src.match(/\.ddp-group-head\{[^}]*\}/) || [''])[0]
+console.log('\n.ddp-group-head colour:', (groupHeadRule.match(/color:[^;]+/) || [''])[0])
+if (!groupHeadRule) throw new Error('.ddp-group-head rule is missing')
+if (groupHeadRule.indexOf('--ddp-fg-dim') >= 0)
+  throw new Error('the session name must not use the dim foreground, that is the too-faint bug')
+if (groupHeadRule.indexOf('var(--ddp-fg,') < 0)
+  throw new Error('the session name should fall back to the primary foreground')
+if (!/--ddp-group-fg/.test(groupHeadRule))
+  throw new Error('the header needs its own --ddp-group-fg knob so a theme can tune it alone')
+const groupNameRule = (src.match(/\.ddp-group-name\{[^}]*\}/) || [''])[0]
+if (!/font-weight:600/.test(groupNameRule))
+  throw new Error('the session name should be semibold so it reads as a header')
+console.log('  ok session name = primary foreground, semibold, themeable via --ddp-group-fg')
+
+
 // The grip sits 12px below the wrapper's top edge and is only 56px wide. If the
 // drag measured the grip's own rect, the wrapper would jump up 12px per drag and
 // the right-edge clamp would be off by 504px. Measure the wrapper instead.
