@@ -920,17 +920,19 @@ if (renderInline({ sessionId: '' }) !== null)
   throw new Error('with no session id the bar must not guess: it renders nothing')
 console.log('  ok other session / no session -> nothing')
 
-// One real download with a known total: bar + rate, no name, no log, no size.
+// One real download with a known total: the bar body + rate. The name, the log
+// and the byte counters stay out — this is the compact presenter.
 CANNED_TASKS = [
   { id: 'one', kind: 'download', sessionId: TEST_SESSION, label: 'big.iso', bytes: 2500000, total: 5000000, speed: 1258291, elapsedMs: 4000 },
 ]
 const inlineTree = renderInline()
-if (!inlineTree) throw new Error('a download in this session must paint the bar')
+if (!inlineTree) throw new Error('a download in this session must paint the chip')
 const inlineClass = String(inlineTree.props.className)
 const mxText = []
 walk(inlineTree, 0, mxText)
 console.log('  chip text =', JSON.stringify(mxText.map(String)))
-if (inlineClass !== 'ddp-mx') throw new Error('inline bar root class changed: ' + inlineClass)
+if (inlineClass !== 'ddp-mx ddp-mx--bar')
+  throw new Error('a known fraction must pick the bar body, got ' + inlineClass)
 // The hover bubble is part of the chip's tree, so the "at a glance" readout is
 // everything except the percentage that only appears on hover.
 const glance = mxText.filter((t) => String(t).indexOf('%') < 0)
@@ -944,8 +946,13 @@ const mxTip = findByClass(inlineTree, 'ddp-mx-tip')[0]
 if (!mxTip || mxTip.props.children !== '50.0%')
   throw new Error('hovering the bar must reveal the percentage')
 if (findByClass(inlineTree, 'ddp-mx-log').length || findByClass(inlineTree, 'ddp-mx-name').length)
-  throw new Error('the compact bar must not print the name or the log line')
-console.log('  ok determinate = bar(50%) + rate + hover tip, no detail rows')
+  throw new Error('the compact chip must not print the name or the log line')
+// All three bodies stay mounted so the shape can morph; the class decides which
+// one is visible, which is what the CSS collapse keys off.
+for (const body of ['ddp-mx-track', 'ddp-mx-ring', 'ddp-mx-dots'])
+  if (!findByClass(inlineTree, body).length)
+    throw new Error('the ' + body + ' body must stay mounted for the morph')
+console.log('  ok determinate = bar(50%) + rate + hover tip, no detail rows, all bodies mounted')
 
 // Choosing the simple bar as the ONLY presenter must retire the floating stack,
 // which is the whole point of the option.
@@ -954,32 +961,63 @@ if (renderOverlay() !== null)
   throw new Error('display = inline must leave the floating overlay unpainted')
 console.log('  ok display = inline -> overlay renders nothing')
 
-// Nothing measurable: the fraction is replaced by the kind of work in flight.
+// No fraction but a known kind: the ring carries the motion, and the wording
+// moves into the hover bubble (a 22px row has no room for it).
 CANNED_TASKS = [
   { id: 's', kind: 'search', sessionId: TEST_SESSION, label: 'dsh 插件', elapsedMs: 900 },
 ]
+const searchTree = renderInline()
 const searchText = []
-walk(renderInline(), 0, searchText)
+walk(searchTree, 0, searchText)
 console.log('  search chip =', JSON.stringify(searchText.map(String)))
-if (searchText.join('') !== '搜索中...')
-  throw new Error('a search has no fraction, so it must say 搜索中..., got ' + JSON.stringify(searchText))
-if (findByClass(renderInline(), 'ddp-mx-track').length)
-  throw new Error('without a total the bar must not draw a trough')
-if (!findByClass(renderInline(), 'ddp-mx-dot').length)
-  throw new Error('the indeterminate chip needs its pulsing dot')
-CANNED_TASKS = [{ id: 'f', kind: 'fetch', sessionId: TEST_SESSION, elapsedMs: 900 }]
-const fetchText = []
-walk(renderInline(), 0, fetchText)
-if (fetchText.join('') !== '抓取中...')
-  throw new Error('a page fetch must read 抓取中..., got ' + JSON.stringify(fetchText.map(String)))
-CANNED_TASKS = [{ id: 'i', kind: 'install', sessionId: TEST_SESSION, elapsedMs: 900 }]
-const installText = []
-walk(renderInline(), 0, installText)
-if (installText.join('') !== '安装中...')
-  throw new Error('an install must read 安装中...')
-console.log('  ok indeterminate = dot + task kind wording')
+if (String(searchTree.props.className) !== 'ddp-mx ddp-mx--ring')
+  throw new Error('a search has no fraction, so it must pick the ring body')
+const searchTip = findByClass(searchTree, 'ddp-mx-tip')[0]
+if (!searchTip || String(searchTip.props.children).indexOf('搜索中') !== 0)
+  throw new Error('the ring must spell the kind of work out on hover, got ' + JSON.stringify(searchTip && searchTip.props.children))
+// Everything the walk found except the hover bubble: the ring paints no words.
+const searchGlance = searchText.filter((t) => String(t) !== String(searchTip.props.children))
+if (searchGlance.join('') !== '')
+  throw new Error('the ring body carries no text of its own, got ' + JSON.stringify(searchGlance.map(String)))
+if ((findByClass(searchTree, 'ddp-mx-fill')[0].props.style || {}).width !== '0%')
+  throw new Error('without a total the fill must be pinned to zero')
 
-// Several calls in one session: the bar tracks one and counts the rest.
+CANNED_TASKS = [{ id: 'f', kind: 'fetch', sessionId: TEST_SESSION, elapsedMs: 5200 }]
+const fetchTip = findByClass(renderInline(), 'ddp-mx-tip')[0]
+if (String(fetchTip.props.children).indexOf('抓取中') !== 0)
+  throw new Error('a page fetch must read 抓取中 on hover, got ' + JSON.stringify(fetchTip.props.children))
+CANNED_TASKS = [{ id: 'i', kind: 'install', sessionId: TEST_SESSION, elapsedMs: 9000 }]
+const installTip = findByClass(renderInline(), 'ddp-mx-tip')[0]
+if (String(installTip.props.children).indexOf('安装中') !== 0)
+  throw new Error('an install must read 安装中 on hover')
+CANNED_TASKS = [
+  { id: 'u', kind: 'download', sessionId: TEST_SESSION, unresolved: true, bytes: 3000000, speed: 524288, elapsedMs: 7000 },
+]
+const unresolvedTip = findByClass(renderInline(), 'ddp-mx-tip')[0]
+if (String(unresolvedTip.props.children).indexOf('下载中') !== 0)
+  throw new Error('a download with no total is a ring, not a bar')
+if (String(unresolvedTip.props.children).indexOf('2.86 MB') < 0)
+  throw new Error('the ring detail must still report how much landed, got ' + JSON.stringify(unresolvedTip.props.children))
+console.log('  ok indeterminate = ring body, wording moved into the hover tip')
+
+// Nothing at all: not even the kind of work. Three breathing dots, no words.
+CANNED_TASKS = [{ id: 'x', sessionId: TEST_SESSION }]
+const dotsTree = renderInline()
+if (String(dotsTree.props.className) !== 'ddp-mx ddp-mx--dots')
+  throw new Error('with no kind at all the chip must fall back to the dots body')
+const dotsText = []
+walk(dotsTree, 0, dotsText)
+const dotsTip = findByClass(dotsTree, 'ddp-mx-tip')[0]
+if (!dotsTip || dotsTip.props.children !== '处理中')
+  throw new Error('the dots must still answer a hover')
+const dotsGlance = dotsText.filter((t) => String(t) !== '处理中')
+if (dotsGlance.join('') !== '')
+  throw new Error('the dots body carries no text of its own, got ' + JSON.stringify(dotsGlance.map(String)))
+if (findByClass(dotsTree, 'ddp-mx-dots')[0].props.children.length !== 3)
+  throw new Error('the dots body is exactly three dots')
+console.log('  ok no state at all = three dots + hover tip')
+
+// Several calls in one session: the chip tracks one and counts the rest.
 CANNED_TASKS = [
   { id: 'q1', kind: 'download', sessionId: TEST_SESSION, bytes: 1000000, total: 2000000, speed: 524288 },
   { id: 'q2', kind: 'download', sessionId: TEST_SESSION, bytes: 100, total: 200, speed: 262144 },

@@ -448,49 +448,119 @@ window.__ModuleLoader__.load({
      a second opaque plate on top of it would read as a button, not a readout. */
   -webkit-backdrop-filter:var(--ddp-mx-glass,blur(10px) saturate(160%));
   backdrop-filter:var(--ddp-mx-glass,blur(10px) saturate(160%));
+  /* Pointing at the chip lifts it a hair and brightens the plate. Kept to
+     background/border/shadow/1px translate: no size change, so the row never
+     reflows while the pointer crosses it. */
+  transition:background .18s ease,border-color .18s ease,box-shadow .22s ease,transform .18s ease;
 }
+.ddp-mx:hover{
+  background:var(--ddp-mx-bg-hover,rgba(255,255,255,.13));
+  border-color:var(--ddp-mx-border-hover,rgba(255,255,255,.26));
+  box-shadow:0 3px 12px -4px rgba(0,0,0,.42);
+  transform:translateY(-1px);
+}
+/* ---------------------------------------------------------------------------
+   Three bodies, one capsule.
+
+   Which body is painted follows the data, not a setting:
+     bar   a fraction is known (a download with a total)  -> track + shimmer
+     ring  work is in flight but no fraction              -> spinning arc
+     dots  nothing measurable at all                      -> three breaths
+
+   All three bodies are always in the tree and are collapsed with width /
+   max-width rather than unmounted. That is what makes bar <-> ring glide:
+   auto widths cannot transition, fixed ones can, so the track shrinks to zero
+   while the ring grows out of it in the same 300ms. Unmounting either side
+   would snap the capsule's width and look like a jump cut.
+   --------------------------------------------------------------------------- */
 .ddp-mx-track{
   /* 36px floor so the fraction stays legible, 64px preferred, and it is the
      first thing to give up space when the row is full. */
-  flex:0 1 auto;min-width:36px;width:64px;height:5px;
+  flex:0 1 auto;min-width:0;width:0;height:5px;
   border-radius:999px;overflow:hidden;
   background:var(--ddp-track-bg,var(--dsw-alias-bg-layer-2,rgba(255,255,255,.13)));
+  opacity:0;margin-right:0;
+  transition:width .3s cubic-bezier(.4,0,.2,1),opacity .2s ease,margin-right .3s cubic-bezier(.4,0,.2,1);
 }
+.ddp-mx--bar .ddp-mx-track{width:64px;min-width:36px;opacity:1;margin-right:6px}
 .ddp-mx-fill{
-  height:100%;border-radius:999px;
+  position:relative;height:100%;border-radius:999px;overflow:hidden;
   background:var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff));
-  background:color-mix(in srgb,var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff)) 78%,transparent);
+  background:color-mix(in srgb,var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff)) 82%,transparent);
   transition:width .45s linear;
 }
-.ddp-mx-rate{flex:0 0 auto;white-space:nowrap;opacity:.85}
-.ddp-mx-extra{flex:0 0 auto;opacity:.6}
-.ddp-mx-label{
-  flex:0 1 auto;min-width:0;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+/* The shimmer. It lives on the fill (not the track) so the light only ever
+   travels over bytes that are actually done — a sweep across the empty part
+   would read as progress that is not happening. */
+.ddp-mx-fill::after{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.55),transparent);
+  transform:translateX(-100%);
+  animation:ddp-mx-shine 1.9s ease-in-out infinite;
 }
-/* Nothing measurable: the bar carries no fraction, so it is replaced by a
-   pulsing dot plus the kind of work in flight (搜索中... / 抓取中... ). */
-.ddp-mx-dot{
-  flex:0 0 auto;width:6px;height:6px;border-radius:999px;
+@keyframes ddp-mx-shine{
+  0%{transform:translateX(-100%)}
+  60%,100%{transform:translateX(100%)}
+}
+/* Hover speeds the light up a touch, so pointing at the chip visibly answers. */
+.ddp-mx:hover .ddp-mx-fill::after{animation-duration:1.1s}
+
+.ddp-mx-ring{
+  flex:0 0 auto;width:0;height:13px;border-radius:999px;
+  opacity:0;margin-right:0;
+  background:conic-gradient(from 0deg,transparent 0deg,var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff)) 300deg,var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff)) 360deg);
+  -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 2.5px),#000 calc(100% - 2.5px));
+  mask:radial-gradient(farthest-side,transparent calc(100% - 2.5px),#000 calc(100% - 2.5px));
+  animation:ddp-mx-spin .85s linear infinite;
+  transition:width .3s cubic-bezier(.4,0,.2,1),opacity .2s ease;
+}
+.ddp-mx--ring .ddp-mx-ring{width:13px;opacity:1}
+@keyframes ddp-mx-spin{to{transform:rotate(360deg)}}
+.ddp-mx:hover .ddp-mx-ring{animation-duration:.55s}
+
+.ddp-mx-dots{
+  flex:0 0 auto;display:inline-flex;align-items:center;gap:3px;
+  width:0;overflow:hidden;opacity:0;margin-right:0;
+  transition:width .3s cubic-bezier(.4,0,.2,1),opacity .2s ease;
+}
+.ddp-mx--dots .ddp-mx-dots{width:18px;opacity:1}
+.ddp-mx-dots > span{
+  flex:0 0 auto;width:4px;height:4px;border-radius:999px;
   background:var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff));
-  animation:ddp-mx-pulse 1.1s ease-in-out infinite;
+  animation:ddp-mx-breathe 1.2s ease-in-out infinite;
 }
-@keyframes ddp-mx-pulse{
-  0%,100%{opacity:.35;transform:scale(.85)}
-  50%{opacity:1;transform:scale(1.15)}
+.ddp-mx-dots > span:nth-child(2){animation-delay:.16s}
+.ddp-mx-dots > span:nth-child(3){animation-delay:.32s}
+@keyframes ddp-mx-breathe{
+  0%,100%{opacity:.3;transform:translateY(0) scale(.85)}
+  40%{opacity:1;transform:translateY(-1.5px) scale(1.05)}
 }
-/* Hover-to-read percentage. Painted above the bar and pointer-transparent, so it
-   never blocks the control next to it. */
+
+.ddp-mx-rate{
+  flex:0 0 auto;white-space:nowrap;overflow:hidden;
+  max-width:0;opacity:0;margin-left:0;
+  transition:max-width .3s cubic-bezier(.4,0,.2,1),opacity .2s ease,margin-left .3s cubic-bezier(.4,0,.2,1);
+}
+.ddp-mx--bar .ddp-mx-rate{max-width:80px;opacity:.85;margin-left:6px}
+.ddp-mx-extra{
+  flex:0 0 auto;opacity:.6;margin-left:6px;
+  transition:margin-left .3s;
+}
+/* Hover-to-read detail. Painted above the chip and pointer-transparent, so it
+   never blocks the control next to it. The wording differs per body: a
+   fraction for the bar, the kind + elapsed for the ring, nothing for the dots. */
 .ddp-mx-tip{
   position:absolute;left:50%;bottom:calc(100% + 6px);
-  transform:translateX(-50%);
-  padding:1px 6px;border-radius:5px;font-size:11px;white-space:nowrap;
+  transform:translateX(-50%) translateY(3px);
+  padding:2px 7px;border-radius:6px;font-size:11px;white-space:nowrap;
   background:var(--ddp-pop-bg,var(--dsw-alias-bg-layer-3,#2a2a30));
   color:var(--ddp-fg,var(--dsw-alias-label-primary,#fff));
   border:1px solid var(--ddp-pop-border,var(--dsw-alias-border-l1,rgba(255,255,255,.14)));
-  opacity:0;transition:opacity .12s;pointer-events:none;z-index:1;
+  box-shadow:0 4px 14px -4px rgba(0,0,0,.45);
+  opacity:0;transition:opacity .14s ease,transform .18s cubic-bezier(.2,1.3,.4,1);
+  pointer-events:none;z-index:1;
 }
-.ddp-mx:hover .ddp-mx-tip{opacity:1}
+.ddp-mx:hover .ddp-mx-tip{opacity:1;transform:translateX(-50%) translateY(0)}
 
 /* ---- settings page ---- */
 .ddp-set{display:flex;flex-direction:column;font-size:13px}
@@ -682,6 +752,8 @@ window.__ModuleLoader__.load({
         // chip needs a touch of dark to separate from it, not more white.
         '--ddp-mx-bg': 'rgba(0,0,0,.05)',
         '--ddp-mx-border': 'rgba(0,0,0,.12)',
+        '--ddp-mx-bg-hover': 'rgba(0,0,0,.09)',
+        '--ddp-mx-border-hover': 'rgba(0,0,0,.22)',
       },
       dark: {
         '--ddp-accent': '#4c8dff',
@@ -1419,14 +1491,19 @@ window.__ModuleLoader__.load({
     /* ---------------- inline bar (composer tool row) ---------------- */
 
     /**
-     * The one thing an inline bar says about a task: how far, how fast, or —
-     * when nothing is measurable — what kind of work is in flight.
+     * The one thing an inline chip says about a task, plus which of the three
+     * bodies should say it.
      *
      * Deliberately NOT `describe()`: that one builds a name and a size readout
      * for a card with room to print them. The tool row is ~22px tall and shared
-     * with other plugins' chips, so this returns the three facts the bar can
-     * actually paint and nothing else. Keeping it separate also means tuning the
-     * compact wording never drifts the overlay's.
+     * with other plugins' chips, so this returns only the facts a body can
+     * actually paint. Keeping it separate also means tuning the compact wording
+     * never drifts the overlay's.
+     *
+     * The shape is decided by what the data can support, never by the task's
+     * name: a fraction needs a known total, so only a resolved download gets
+     * the bar. Everything else is motion (ring) or, when even the kind is
+     * missing, three dots.
      *
      * @param {object} task
      */
@@ -1434,31 +1511,64 @@ window.__ModuleLoader__.load({
       const bytes = Number(task.bytes) || 0
       const total = Number(task.total)
       const hasTotal = Number.isFinite(total) && total > 0
-      const rate = fmtSpeed(Number(task.speed) || 0)
+      const speed = Number(task.speed) || 0
+      const rate = fmtSpeed(speed)
       const kind = String(task.kind || '')
 
       // Only a download with a known total has a fraction worth drawing. Every
-      // other shape would have to invent one, so they get words instead.
+      // other shape would have to invent one.
       const percent =
         kind === 'download' && hasTotal && !task.unresolved
           ? clamp((bytes / total) * 100, 0, 100)
           : null
 
       if (percent !== null) {
-        return { determinate: true, percent, rate, label: '', dot: false }
+        return {
+          shape: 'bar',
+          percent,
+          rate,
+          // The length already carries the fraction; the number is the second
+          // copy of it, so it waits for a pointer.
+          tip: percent.toFixed(1) + '%',
+          aria: { 'aria-valuenow': Math.round(percent) },
+        }
       }
 
+      if (!kind) {
+        // Not even the kind of work is known: nothing honest to spell out.
+        return {
+          shape: 'dots',
+          percent: null,
+          rate: '',
+          tip: '处理中',
+          aria: { 'aria-valuetext': '处理中' },
+        }
+      }
+
+      // Work is in flight but unmeasurable. The ring carries the motion; the
+      // words move into the hover bubble, which is the only place with room.
       const label =
         kind === 'search'
-          ? '搜索中...'
+          ? '搜索中'
           : kind === 'fetch'
-            ? '抓取中...'
+            ? '抓取中'
             : kind === 'install'
-              ? '安装中...'
+              ? '安装中'
               : kind === 'download'
-                ? '下载中...'
-                : '处理中...'
-      return { determinate: false, percent: null, rate, label, dot: true }
+                ? '下载中'
+                : '处理中'
+      const elapsed = secs(task.elapsedMs)
+      const bits = [label + (elapsed > 0 ? ' · ' + elapsed + 's' : '')]
+      // A download whose total never resolved still knows how much landed.
+      if (kind === 'download' && bytes > 0) bits.push(fmtBytes(bytes))
+      if (rate) bits.push(rate)
+      return {
+        shape: 'ring',
+        percent: null,
+        rate,
+        tip: bits.join(' · '),
+        aria: { 'aria-valuetext': label },
+      }
     }
 
     /**
@@ -1468,7 +1578,7 @@ window.__ModuleLoader__.load({
      * only ever show this conversation), the shared task list, and the display
      * setting. It renders nothing at all when this session is idle — an empty
      * chip would occupy a neighbour's space for no information, which is the
-     * whole reason the bar opts out of growing.
+     * whole reason the chip opts out of growing.
      */
     function InlineBar(props) {
       const settings = useSettings()
@@ -1484,7 +1594,7 @@ window.__ModuleLoader__.load({
       // the hook count between renders.
       if (!settings.enabled || !wantsInline || !sessionId || !mine.length) return null
 
-      // Several calls in one session: the bar tracks the oldest, and a count chip
+      // Several calls in one session: the chip tracks the oldest, and a count
       // says how many others are queued behind it. Drawing a stacked bar for a
       // 22px row would say less than the number does.
       const head = mine[0]
@@ -1493,51 +1603,44 @@ window.__ModuleLoader__.load({
 
       const style = themeTokens(settings.theme) || undefined
 
-      const children = []
-      if (brief.determinate) {
-        children.push(
-          h(
-            'span',
-            { className: 'ddp-mx-track' },
-            h('span', {
-              className: 'ddp-mx-fill',
-              style: { width: brief.percent.toFixed(1) + '%', display: 'block' },
-            }),
-          ),
-        )
-      } else {
-        children.push(h('span', { className: 'ddp-mx-dot' }))
-        children.push(h('span', { className: 'ddp-mx-label' }, brief.label))
-      }
-      if (settings.showSpeed && brief.rate) {
-        children.push(h('span', { className: 'ddp-mx-rate' }, brief.rate))
-      }
-      if (extra > 0) children.push(h('span', { className: 'ddp-mx-extra' }, '+' + extra))
-      // The percentage lives in a hover bubble on purpose: the bar already shows
-      // the fraction as length, so plain numbers would be the second copy of it.
-      if (brief.determinate) {
-        children.push(
-          h('span', { className: 'ddp-mx-tip' }, brief.percent.toFixed(1) + '%'),
-        )
-      }
-
+      // Every body is always mounted; the `ddp-mx--<shape>` class collapses the
+      // two that are not in use. See the CSS block for why (a mounted-but-zero
+      // body is what lets the width animate).
       return h(
         'div',
         {
-          className: 'ddp-mx',
+          className: 'ddp-mx ddp-mx--' + brief.shape,
           style,
           // Screen readers get the number without needing a pointer.
           role: 'progressbar',
           'aria-valuemin': 0,
           'aria-valuemax': 100,
-          ...(brief.determinate
-            ? { 'aria-valuenow': Math.round(brief.percent) }
-            : { 'aria-valuetext': brief.label }),
-          title: brief.determinate
-            ? brief.percent.toFixed(1) + '%'
-            : brief.label + (brief.rate ? ' · ' + brief.rate : ''),
+          ...brief.aria,
+          title: brief.tip,
         },
-        children,
+        h(
+          'span',
+          { className: 'ddp-mx-track' },
+          h('span', {
+            className: 'ddp-mx-fill',
+            style: { width: brief.percent === null ? '0%' : brief.percent.toFixed(1) + '%' },
+          }),
+        ),
+        h('span', { className: 'ddp-mx-ring' }),
+        h(
+          'span',
+          { className: 'ddp-mx-dots' },
+          h('span', null),
+          h('span', null),
+          h('span', null),
+        ),
+        h(
+          'span',
+          { className: 'ddp-mx-rate' },
+          settings.showSpeed && brief.rate ? brief.rate : '',
+        ),
+        extra > 0 ? h('span', { className: 'ddp-mx-extra' }, '+' + extra) : null,
+        h('span', { className: 'ddp-mx-tip' }, brief.tip),
       )
     }
 
