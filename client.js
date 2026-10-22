@@ -1798,8 +1798,13 @@ window.__ModuleLoader__.load({
             : status === 'failed'
               ? '失败'
               : '运行中'
+      // A job's label is the command line that started it, which can be a
+      // screenful. One line, capped: the row exists to say *that* something
+      // runs, and the full text stays in the tooltip.
+      const raw = String(row.label || '后台任务')
+      const firstLine = raw.split('\n')[0].trim() || '后台任务'
       return {
-        label: String(row.label || '后台任务'),
+        label: firstLine.length > 48 ? firstLine.slice(0, 47) + '…' : firstLine,
         detail: String(row.detail || ''),
         state,
         waiting,
