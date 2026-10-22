@@ -419,6 +419,79 @@ window.__ModuleLoader__.load({
 .ddp-group-count{flex:0 0 auto;opacity:.75;font-variant-numeric:tabular-nums}
 .ddp-group-cards{display:flex;flex-direction:column;gap:8px}
 
+/* ---- inline bar (composer tool row) ----
+   A second, deliberately plainer presenter: one bar plus the live rate, no name,
+   no size, no log line. It lives in the composer's tool row next to the
+   permission chip instead of floating over the page, and it only ever shows the
+   session whose composer it is sitting in.
+
+   Every value here is a --ddp-* custom property with the host token behind it,
+   exactly like the overlay, so a theme reaches this bar through the same
+   registry; nothing about it is hard-coded to one look.
+
+   The row belongs to whoever else registered into it, so the bar opts out of
+   growing (flex:0 0 auto) and stays inside a max-width: when the row is crowded
+   the bar shrinks and its label ellipsises, it never pushes a neighbour off. */
+.ddp-mx{
+  /* Anchor for the hover percentage, which is painted above the bar. */
+  position:relative;
+  display:inline-flex;align-items:center;gap:6px;
+  flex:0 0 auto;min-width:0;max-width:min(240px,40vw);
+  height:22px;padding:0 8px;
+  border-radius:999px;
+  font-size:11px;line-height:1;
+  font-variant-numeric:tabular-nums;
+  color:var(--ddp-fg,var(--dsw-alias-label-primary,#e8e8ea));
+  background:var(--ddp-mx-bg,rgba(255,255,255,.07));
+  border:1px solid var(--ddp-mx-border,rgba(255,255,255,.12));
+  /* Same glass recipe as a card, weaker: the tool row is already a material and
+     a second opaque plate on top of it would read as a button, not a readout. */
+  -webkit-backdrop-filter:var(--ddp-mx-glass,blur(10px) saturate(160%));
+  backdrop-filter:var(--ddp-mx-glass,blur(10px) saturate(160%));
+}
+.ddp-mx-track{
+  /* 36px floor so the fraction stays legible, 64px preferred, and it is the
+     first thing to give up space when the row is full. */
+  flex:0 1 auto;min-width:36px;width:64px;height:5px;
+  border-radius:999px;overflow:hidden;
+  background:var(--ddp-track-bg,var(--dsw-alias-bg-layer-2,rgba(255,255,255,.13)));
+}
+.ddp-mx-fill{
+  height:100%;border-radius:999px;
+  background:var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff));
+  background:color-mix(in srgb,var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff)) 78%,transparent);
+  transition:width .45s linear;
+}
+.ddp-mx-rate{flex:0 0 auto;white-space:nowrap;opacity:.85}
+.ddp-mx-extra{flex:0 0 auto;opacity:.6}
+.ddp-mx-label{
+  flex:0 1 auto;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+/* Nothing measurable: the bar carries no fraction, so it is replaced by a
+   pulsing dot plus the kind of work in flight (搜索中... / 抓取中... ). */
+.ddp-mx-dot{
+  flex:0 0 auto;width:6px;height:6px;border-radius:999px;
+  background:var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff));
+  animation:ddp-mx-pulse 1.1s ease-in-out infinite;
+}
+@keyframes ddp-mx-pulse{
+  0%,100%{opacity:.35;transform:scale(.85)}
+  50%{opacity:1;transform:scale(1.15)}
+}
+/* Hover-to-read percentage. Painted above the bar and pointer-transparent, so it
+   never blocks the control next to it. */
+.ddp-mx-tip{
+  position:absolute;left:50%;bottom:calc(100% + 6px);
+  transform:translateX(-50%);
+  padding:1px 6px;border-radius:5px;font-size:11px;white-space:nowrap;
+  background:var(--ddp-pop-bg,var(--dsw-alias-bg-layer-3,#2a2a30));
+  color:var(--ddp-fg,var(--dsw-alias-label-primary,#fff));
+  border:1px solid var(--ddp-pop-border,var(--dsw-alias-border-l1,rgba(255,255,255,.14)));
+  opacity:0;transition:opacity .12s;pointer-events:none;z-index:1;
+}
+.ddp-mx:hover .ddp-mx-tip{opacity:1}
+
 /* ---- settings page ---- */
 .ddp-set{display:flex;flex-direction:column;font-size:13px}
 .ddp-set-row{
@@ -538,9 +611,22 @@ window.__ModuleLoader__.load({
 
     const SETTINGS_KEY = 'dsh-download-progress:settings'
     const ORDERS = ['newest-first', 'oldest-first']
+    // Two presenters, one dataset. 'overlay' is the floating card stack (what the
+    // plugin has always done); 'inline' is the compact bar inside the composer
+    // tool row; 'both' is allowed because they cost nothing to run together and
+    // someone may want the glance plus the details.
+    const DISPLAYS = ['overlay', 'inline', 'both']
+    const DISPLAY_LABELS = [
+      { value: 'overlay', label: '浮层（悬浮卡片）' },
+      { value: 'inline', label: '对话框简易条' },
+      { value: 'both', label: '两者都显示' },
+    ]
     const DEFAULT_Y = 76
     const DEFAULTS = {
       enabled: true,
+      // Default keeps the historical single presenter, so upgrading changes
+      // nothing on screen until the user picks the simple bar.
+      display: 'overlay',
       showSpeed: true,
       maxVisible: 3,
       order: 'newest-first',
@@ -592,6 +678,10 @@ window.__ModuleLoader__.load({
         '--ddp-group-bg': 'rgba(255,255,255,.55)',
         '--ddp-group-border': 'rgba(0,0,0,.10)',
         '--ddp-group-shadow': 'none',
+        // Inline bar: the composer tool row is already a light material, so the
+        // chip needs a touch of dark to separate from it, not more white.
+        '--ddp-mx-bg': 'rgba(0,0,0,.05)',
+        '--ddp-mx-border': 'rgba(0,0,0,.12)',
       },
       dark: {
         '--ddp-accent': '#4c8dff',
@@ -746,6 +836,7 @@ window.__ModuleLoader__.load({
       const rows = Math.round(Number(src.maxVisible))
       return {
         enabled: typeof src.enabled === 'boolean' ? src.enabled : DEFAULTS.enabled,
+        display: DISPLAYS.indexOf(src.display) >= 0 ? src.display : DEFAULTS.display,
         showSpeed: typeof src.showSpeed === 'boolean' ? src.showSpeed : DEFAULTS.showSpeed,
         maxVisible:
           Number.isFinite(rows) && rows >= 1 && rows <= 6 ? rows : DEFAULTS.maxVisible,
@@ -1325,6 +1416,131 @@ window.__ModuleLoader__.load({
       }, LEAVE_GRACE_MS)
     }
 
+    /* ---------------- inline bar (composer tool row) ---------------- */
+
+    /**
+     * The one thing an inline bar says about a task: how far, how fast, or —
+     * when nothing is measurable — what kind of work is in flight.
+     *
+     * Deliberately NOT `describe()`: that one builds a name and a size readout
+     * for a card with room to print them. The tool row is ~22px tall and shared
+     * with other plugins' chips, so this returns the three facts the bar can
+     * actually paint and nothing else. Keeping it separate also means tuning the
+     * compact wording never drifts the overlay's.
+     *
+     * @param {object} task
+     */
+    function briefOf(task) {
+      const bytes = Number(task.bytes) || 0
+      const total = Number(task.total)
+      const hasTotal = Number.isFinite(total) && total > 0
+      const rate = fmtSpeed(Number(task.speed) || 0)
+      const kind = String(task.kind || '')
+
+      // Only a download with a known total has a fraction worth drawing. Every
+      // other shape would have to invent one, so they get words instead.
+      const percent =
+        kind === 'download' && hasTotal && !task.unresolved
+          ? clamp((bytes / total) * 100, 0, 100)
+          : null
+
+      if (percent !== null) {
+        return { determinate: true, percent, rate, label: '', dot: false }
+      }
+
+      const label =
+        kind === 'search'
+          ? '搜索中...'
+          : kind === 'fetch'
+            ? '抓取中...'
+            : kind === 'install'
+              ? '安装中...'
+              : kind === 'download'
+                ? '下载中...'
+                : '处理中...'
+      return { determinate: false, percent: null, rate, label, dot: true }
+    }
+
+    /**
+     * Compact presenter for the composer's tool row.
+     *
+     * Three inputs decide what it paints: the slot's own `sessionId` (so it can
+     * only ever show this conversation), the shared task list, and the display
+     * setting. It renders nothing at all when this session is idle — an empty
+     * chip would occupy a neighbour's space for no information, which is the
+     * whole reason the bar opts out of growing.
+     */
+    function InlineBar(props) {
+      const settings = useSettings()
+      const wantsInline = settings.display === 'inline' || settings.display === 'both'
+      const tasks = useTasks(Boolean(settings.enabled && wantsInline))
+
+      const sessionId = String((props && props.sessionId) || '')
+      const mine = (Array.isArray(tasks) ? tasks : []).filter(
+        (task) => task && typeof task === 'object' && sessionKeyOf(task) === sessionId,
+      )
+
+      // Hooks are all above this line: the early returns below must never change
+      // the hook count between renders.
+      if (!settings.enabled || !wantsInline || !sessionId || !mine.length) return null
+
+      // Several calls in one session: the bar tracks the oldest, and a count chip
+      // says how many others are queued behind it. Drawing a stacked bar for a
+      // 22px row would say less than the number does.
+      const head = mine[0]
+      const brief = briefOf(head)
+      const extra = mine.length - 1
+
+      const style = themeTokens(settings.theme) || undefined
+
+      const children = []
+      if (brief.determinate) {
+        children.push(
+          h(
+            'span',
+            { className: 'ddp-mx-track' },
+            h('span', {
+              className: 'ddp-mx-fill',
+              style: { width: brief.percent.toFixed(1) + '%', display: 'block' },
+            }),
+          ),
+        )
+      } else {
+        children.push(h('span', { className: 'ddp-mx-dot' }))
+        children.push(h('span', { className: 'ddp-mx-label' }, brief.label))
+      }
+      if (settings.showSpeed && brief.rate) {
+        children.push(h('span', { className: 'ddp-mx-rate' }, brief.rate))
+      }
+      if (extra > 0) children.push(h('span', { className: 'ddp-mx-extra' }, '+' + extra))
+      // The percentage lives in a hover bubble on purpose: the bar already shows
+      // the fraction as length, so plain numbers would be the second copy of it.
+      if (brief.determinate) {
+        children.push(
+          h('span', { className: 'ddp-mx-tip' }, brief.percent.toFixed(1) + '%'),
+        )
+      }
+
+      return h(
+        'div',
+        {
+          className: 'ddp-mx',
+          style,
+          // Screen readers get the number without needing a pointer.
+          role: 'progressbar',
+          'aria-valuemin': 0,
+          'aria-valuemax': 100,
+          ...(brief.determinate
+            ? { 'aria-valuenow': Math.round(brief.percent) }
+            : { 'aria-valuetext': brief.label }),
+          title: brief.determinate
+            ? brief.percent.toFixed(1) + '%'
+            : brief.label + (brief.rate ? ' · ' + brief.rate : ''),
+        },
+        children,
+      )
+    }
+
     function Overlay(props) {
       const settings = useSettings()
       const liveTasks = useTasks(settings.enabled)
@@ -1537,6 +1753,9 @@ window.__ModuleLoader__.load({
       // Bail out only here: all hooks above have already run, so the hook count
       // stays identical whether or not anything is painted.
       if (!settings.enabled) return null
+      // The user picked the simple bar as the ONE presenter. The overlay keeps
+      // polling (it must, in case they switch back), but paints nothing.
+      if (settings.display === 'inline') return null
       // Real downloads always show. Without one, the overlay exists only in debug
       // mode — otherwise it renders nothing at all (not even the grip).
       if (!hasReal && !canPeek) return null
@@ -1704,6 +1923,14 @@ window.__ModuleLoader__.load({
           checked: settings.enabled,
           onChange: (next) => set({ enabled: next }),
         }),
+        selectRow({
+          label: '显示方式',
+          hint: '「浮层」是悬在页面上方的卡片堆（原有样式）；「简易条」是嵌在对话框那一行的细进度条，只显示当前会话、只带速度，悬停看百分比；「两者都显示」则同时出现。',
+          aria: '显示方式',
+          value: settings.display,
+          options: DISPLAY_LABELS,
+          onChange: (value) => set({ display: value }),
+        }),
         toggleRow({
           label: '显示下载速度',
           hint: '在已下载大小旁边显示当前速度，例如 3.2 MB/s。',
@@ -1826,6 +2053,19 @@ window.__ModuleLoader__.load({
               label: () => '下载进度条',
             },
             SettingsPage,
+          ),
+        )
+
+        // The composer's tool row — the line that carries the permission chip.
+        // It is a LIST slot: several plugins park compact chips here, so the
+        // entry is ordered behind the ones already known to live here
+        // (credits at 4, the skills chip at 1000) and is free to be pushed
+        // further back by anything that picks a higher order later. The bar
+        // itself never grows, so sharing the row costs a neighbour nothing.
+        ctx.slots.inject('conversation.input.left', () =>
+          ctx.slots.register(
+            { name: 'conversation.input.left', id: 'dsh-download-progress', order: 2000 },
+            InlineBar,
           ),
         )
       },

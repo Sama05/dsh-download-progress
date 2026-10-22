@@ -99,13 +99,18 @@ console.log('load() ok, id =', def.id)
 // One task per kind the plugin knows how to describe, so the overlay render
 // path exercises every branch of describe().
 // Mutable so a later block can simulate "nothing is downloading".
-let CANNED_TASKS = [
-  { id: 'a', kind: 'download', label: 'node-v20.11.0-win-x64.zip', bytes: 12345678, total: 29701389, speed: 5242880, elapsedMs: 3400 },
-  { id: 'b', kind: 'install', phase: 'installing', log: 'Progress: resolved 42, reused 40', elapsedMs: 9000 },
-  { id: 'c', kind: 'fetch', elapsedMs: 5200 },
-  { id: 'd', kind: 'search', label: 'dsh 插件开发文档', elapsedMs: 1200 },
-  { id: 'e', kind: 'download', unresolved: true, elapsedMs: 7000 },
+// Every canned row belongs to TEST_SESSION, because the inline bar only paints
+// the rows of the session whose composer it sits in and a row with no session
+// id is intentionally kept out of that filter.
+const TEST_SESSION = 'sess-alpha'
+const CANNED_TASKS_BASE = [
+  { id: 'a', kind: 'download', sessionId: TEST_SESSION, label: 'node-v20.11.0-win-x64.zip', bytes: 12345678, total: 29701389, speed: 5242880, elapsedMs: 3400 },
+  { id: 'b', kind: 'install', sessionId: TEST_SESSION, phase: 'installing', log: 'Progress: resolved 42, reused 40', elapsedMs: 9000 },
+  { id: 'c', kind: 'fetch', sessionId: TEST_SESSION, elapsedMs: 5200 },
+  { id: 'd', kind: 'search', sessionId: TEST_SESSION, label: 'dsh 插件开发文档', elapsedMs: 1200 },
+  { id: 'e', kind: 'download', sessionId: TEST_SESSION, unresolved: true, elapsedMs: 7000 },
 ]
+let CANNED_TASKS = CANNED_TASKS_BASE
 
 const React = {
   // Counts hook calls per render so a conditional hook shows up as a changed
@@ -176,9 +181,17 @@ for (const { spec, component } of registrations) {
   console.log(`register ${spec.name} id=${spec.id} order=${spec.order} label=${JSON.stringify(label)}`)
   if (typeof spec.id !== 'string' || !spec.id) throw new Error(spec.name + ': missing id')
   if (typeof component !== 'function') throw new Error(spec.name + ': component is not a function')
-  const tree = component({ close: () => {} })
+  // The composer bar is idle by default (nothing of this session is downloading),
+  // so rendering nothing is correct there and asserted in its own block below.
+  // The two always-present slots must always paint.
+  const optional = spec.name === 'conversation.input.left'
+  const tree = component({ close: () => {}, sessionId: TEST_SESSION })
   if (tree === undefined) throw new Error(spec.name + ': component returned undefined')
-  if (tree === null) throw new Error(spec.name + ': component rendered nothing (null)')
+  if (tree === null) {
+    if (!optional) throw new Error(spec.name + ': component rendered nothing (null)')
+    console.log('  (idle: renders nothing, checked below)')
+    continue
+  }
   rendered[spec.name] = tree
 }
 
@@ -304,8 +317,25 @@ const checkboxes = controls.filter((c) => c.kind === 'input' && c.type === 'chec
 const selects = controls.filter((c) => c.kind === 'select')
 const buttons = controls.filter((c) => c.kind === 'button')
 if (checkboxes.length !== 4) throw new Error('expected 4 checkboxes, got ' + checkboxes.length)
-if (selects.length !== 4) throw new Error('expected 4 selects, got ' + selects.length)
+if (selects.length !== 5) throw new Error('expected 5 selects, got ' + selects.length)
 if (buttons.length !== 1) throw new Error('expected the reset-position button')
+
+const displaySelect = selects.find((c) => c.node.props['aria-label'] === '显示方式')
+if (!displaySelect) throw new Error('settings page is missing the display-mode dropdown')
+if (displaySelect.options !== 3)
+  throw new Error('display select should offer overlay / inline / both, got ' + displaySelect.options)
+const displayValues = []
+;(function scan(root) {
+  if (!root || typeof root !== 'object') return
+  if (Array.isArray(root)) return root.forEach(scan)
+  if (root.type === 'option') displayValues.push(root.props.value)
+  if (root.props) scan(root.props.children)
+})(displaySelect.node)
+console.log('  display options =', JSON.stringify(displayValues))
+if (JSON.stringify(displayValues) !== JSON.stringify(['overlay', 'inline', 'both']))
+  throw new Error('display options must be overlay / inline / both')
+if (displaySelect.node.props.value !== 'overlay')
+  throw new Error('display must default to the overlay, so upgrading changes nothing on screen')
 if (!selects.some((c) => c.node.props['aria-label'] === '排列顺序' && c.options === 2))
   throw new Error('order select should have 2 options')
 if (!selects.some((c) => c.node.props['aria-label'] === '最多同时显示条数' && c.options === 6))
@@ -860,5 +890,128 @@ if (store.getItem('dsh-download-progress:settings').indexOf('preview') >= 0)
   throw new Error('sample/peek state must never be persisted')
 console.log('  ok reset position + no peek state persisted')
 
-console.log('\nSMOKE OK — bundle loads, both slots register, settings page renders', texts.length, 'text nodes')
+/* ---- inline bar: the compact presenter in the composer tool row ---- */
+// Registered into a LIST slot that other plugins also fill, so the two things
+// that must hold are (a) it never grows and pushes a neighbour off, and (b) it
+// paints nothing at all when this conversation is idle.
+console.log('\n---- inline bar ----')
+const inlineSlot = registrations.find((r) => r.spec.name === 'conversation.input.left')
+if (!inlineSlot) throw new Error('the composer tool row registration is missing')
+if (inlineSlot.spec.order <= 4)
+  throw new Error('the bar must order behind the chips already in the row, got ' + inlineSlot.spec.order)
+console.log('  ok registered into conversation.input.left at order', inlineSlot.spec.order)
+
+function renderInline(props) {
+  return inlineSlot.component(Object.assign({ sessionId: TEST_SESSION }, props))
+}
+
+// Default display is the overlay, so the bar stays out of the row entirely.
+CANNED_TASKS = CANNED_TASKS_BASE
+if (renderInline() !== null)
+  throw new Error('with display = overlay the inline bar must not paint anything')
+console.log('  ok display = overlay -> no chip in the tool row')
+
+// Nothing of THIS session in flight: an empty chip would spend a neighbour's
+// space on no information.
+displaySelect.node.props.onChange({ target: { value: 'inline' } })
+if (renderInline({ sessionId: 'some-other-session' }) !== null)
+  throw new Error('the bar must only ever show the session whose composer it sits in')
+if (renderInline({ sessionId: '' }) !== null)
+  throw new Error('with no session id the bar must not guess: it renders nothing')
+console.log('  ok other session / no session -> nothing')
+
+// One real download with a known total: bar + rate, no name, no log, no size.
+CANNED_TASKS = [
+  { id: 'one', kind: 'download', sessionId: TEST_SESSION, label: 'big.iso', bytes: 2500000, total: 5000000, speed: 1258291, elapsedMs: 4000 },
+]
+const inlineTree = renderInline()
+if (!inlineTree) throw new Error('a download in this session must paint the bar')
+const inlineClass = String(inlineTree.props.className)
+const mxText = []
+walk(inlineTree, 0, mxText)
+console.log('  chip text =', JSON.stringify(mxText.map(String)))
+if (inlineClass !== 'ddp-mx') throw new Error('inline bar root class changed: ' + inlineClass)
+// The hover bubble is part of the chip's tree, so the "at a glance" readout is
+// everything except the percentage that only appears on hover.
+const glance = mxText.filter((t) => String(t).indexOf('%') < 0)
+if (glance.join('') !== '1.20 MB/s')
+  throw new Error('the compact bar shows the rate and nothing else, got ' + JSON.stringify(mxText))
+const fill = findByClass(inlineTree, 'ddp-mx-fill')[0]
+if (!fill) throw new Error('the bar needs a fill')
+if ((fill.props.style || {}).width !== '50.0%')
+  throw new Error('fill width must be the real fraction, got ' + JSON.stringify(fill.props.style))
+const mxTip = findByClass(inlineTree, 'ddp-mx-tip')[0]
+if (!mxTip || mxTip.props.children !== '50.0%')
+  throw new Error('hovering the bar must reveal the percentage')
+if (findByClass(inlineTree, 'ddp-mx-log').length || findByClass(inlineTree, 'ddp-mx-name').length)
+  throw new Error('the compact bar must not print the name or the log line')
+console.log('  ok determinate = bar(50%) + rate + hover tip, no detail rows')
+
+// Choosing the simple bar as the ONLY presenter must retire the floating stack,
+// which is the whole point of the option.
+CANNED_TASKS = CANNED_TASKS_BASE
+if (renderOverlay() !== null)
+  throw new Error('display = inline must leave the floating overlay unpainted')
+console.log('  ok display = inline -> overlay renders nothing')
+
+// Nothing measurable: the fraction is replaced by the kind of work in flight.
+CANNED_TASKS = [
+  { id: 's', kind: 'search', sessionId: TEST_SESSION, label: 'dsh 插件', elapsedMs: 900 },
+]
+const searchText = []
+walk(renderInline(), 0, searchText)
+console.log('  search chip =', JSON.stringify(searchText.map(String)))
+if (searchText.join('') !== '搜索中...')
+  throw new Error('a search has no fraction, so it must say 搜索中..., got ' + JSON.stringify(searchText))
+if (findByClass(renderInline(), 'ddp-mx-track').length)
+  throw new Error('without a total the bar must not draw a trough')
+if (!findByClass(renderInline(), 'ddp-mx-dot').length)
+  throw new Error('the indeterminate chip needs its pulsing dot')
+CANNED_TASKS = [{ id: 'f', kind: 'fetch', sessionId: TEST_SESSION, elapsedMs: 900 }]
+const fetchText = []
+walk(renderInline(), 0, fetchText)
+if (fetchText.join('') !== '抓取中...')
+  throw new Error('a page fetch must read 抓取中..., got ' + JSON.stringify(fetchText.map(String)))
+CANNED_TASKS = [{ id: 'i', kind: 'install', sessionId: TEST_SESSION, elapsedMs: 900 }]
+const installText = []
+walk(renderInline(), 0, installText)
+if (installText.join('') !== '安装中...')
+  throw new Error('an install must read 安装中...')
+console.log('  ok indeterminate = dot + task kind wording')
+
+// Several calls in one session: the bar tracks one and counts the rest.
+CANNED_TASKS = [
+  { id: 'q1', kind: 'download', sessionId: TEST_SESSION, bytes: 1000000, total: 2000000, speed: 524288 },
+  { id: 'q2', kind: 'download', sessionId: TEST_SESSION, bytes: 100, total: 200, speed: 262144 },
+  { id: 'q3', kind: 'download', sessionId: TEST_SESSION, bytes: 100, total: 200, speed: 262144 },
+]
+const multiText = []
+walk(renderInline(), 0, multiText)
+console.log('  multi chip =', JSON.stringify(multiText.map(String)))
+if (multiText.indexOf('+2') < 0) throw new Error('a session with 3 calls must say how many follow')
+if (findByClass(renderInline(), 'ddp-mx-fill')[0].props.style.width !== '50.0%')
+  throw new Error('the bar must track this session\'s own oldest task, not another session\'s')
+
+// Speed is a setting here too, and the theme reaches the chip through the same
+// token registry the overlay uses.
+CANNED_TASKS = CANNED_TASKS_BASE
+const speedToggle = checkboxes.find((c) => c.node.props['aria-label'] === '显示下载速度')
+speedToggle.node.props.onChange({ target: { checked: false } })
+const noSpeedText = []
+walk(renderInline(), 0, noSpeedText)
+console.log('  speed off chip =', JSON.stringify(noSpeedText.map(String)))
+if (noSpeedText.some((t) => String(t).indexOf('/s') >= 0))
+  throw new Error('with speed off the chip must not print a rate, got ' + JSON.stringify(noSpeedText.map(String)))
+speedToggle.node.props.onChange({ target: { checked: true } })
+const themeDrop = selects.find((c) => c.node.props['aria-label'] === '主题')
+themeDrop.node.props.onChange({ target: { value: 'light' } })
+const themed = renderInline()
+if (!themed || !themed.props.style || themed.props.style['--ddp-fg'] !== '#1b1b1f')
+  throw new Error('the inline bar must take its look from the same theme tokens as the overlay')
+console.log('  ok theme tokens reach the chip; speed setting respected')
+themeDrop.node.props.onChange({ target: { value: 'auto' } })
+displaySelect.node.props.onChange({ target: { value: 'overlay' } })
+CANNED_TASKS = []
+
+console.log('\nSMOKE OK — bundle loads,', Object.keys(injectors).length, 'slots register, settings page renders', texts.length, 'text nodes')
 

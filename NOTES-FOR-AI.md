@@ -37,6 +37,7 @@ DSH **没有**"下载进度"这类事件。工具层只有两个端点事件：
 | 安装阶段 | `plugin-manager/install-state` | `progress.phase` = `installing` / `cancelling` / `applying` |
 | 数据下发 | `ctx.webServer.register({ kind:'exact', path:'/download-progress/state' })` | Host 每 1s 采样一次，Client 每 1s 拉一次 JSON |
 | **UI 挂载** | `ctx.slots.register({ name:'shell.overlay', ... })` | 全帧浮动层，**在布局流之外** |
+| **简易条挂载** | `ctx.slots.register({ name:'conversation.input.left', order:2000 })` | 输入框上方那一行的 list 槽位，跟「完全权限」同排。见 §3.3 |
 
 ### 1.3 为什么是 `shell.overlay` 而不是输入框停靠区
 
@@ -45,6 +46,10 @@ DSH **没有**"下载进度"这类事件。工具层只有两个端点事件：
 
 因为它在布局流之外，**出现/消失不会挤动任何东西**——这直接满足"进度条触发时窗口不要抖动/错位"。
 换成 `conversation.input.dock` 之类的停靠槽位，每出现一条就会把输入框往下推，必然抖。
+
+**但 2026-10-22 追加了可选的第二形态**（§3.3）：`conversation.input.left` 是个**已经存在**的工具行
+（权限 chip 就住那儿），往里塞一个 `22px` 高、`flex:0 0 auto` 的 chip **不会改变行高**，
+所以「不抖动」这条对它同样成立。两者由「显示方式」开关二选一，默认仍只开浮层。
 
 ### 1.4 已排除的路径（都试过，有证据）
 
@@ -105,12 +110,14 @@ client.js
 ├── CSS            ← 所有视觉样式都在这一个模板字符串里（改外观只动这里）
 ├── describe(task) ← 数据 → 文案的映射（改文案只动这里）
 ├── Card           ← 单条进度卡片（结构）
-└── Overlay        ← 列表容器 + 1s 轮询
+├── Overlay        ← 浮层列表容器 + 1s 轮询
+└── InlineBar      ← 对话框工具行里的简易条（结构，见 §3.3）
 ```
 
 - **改颜色/圆角/动画/位置** → 只改 `CSS` 常量。
-- **改文案/文案格式** → 只改 `describe()`。
+- **改文案/文案格式** → 只改 `describe()`；简易条的极简文案单独在 `briefOf()`（§3.3）。
 - **改卡片结构** → 只改 `Card()`。
+- **改简易条结构** → 只改 `InlineBar()`。
 
 样式注入走 `ctx.effect(() => { 建 <style id="dsh-download-progress-style">; return () => 移除 })`，
 随插件卸载自动清理，不污染全局。
@@ -149,7 +156,8 @@ client.js
 | 配置项 | 取值 | 默认 | 作用 |
 | --- | --- | --- | --- |
 | 显示下载进度浮层 | 开 / 关 | 开 | 关掉后**不再轮询状态接口**，也不渲染任何浮层（Host 半仍在采样，开销可忽略） |
-| 显示下载速度 | 开 / 关 | 开 | 关掉后文案只留「已下载 / 总大小」 |
+| 显示方式 | 浮层 / 对话框简易条 / 两者都显示 | 浮层 | 选「简易条」后上方浮层不再出现，进度改画在输入框那一行。见 §3.3 |
+| 显示下载速度 | 开 / 关 | 开 | 关掉后文案只留「已下载 / 总大小」；简易条则只留条 / 任务类型 |
 | 调试模式（显示模拟数据） | 开 / 关 | **关** | 关：只显示真实下载，没有下载就完全不显示。开：没有下载时出现一条把手，悬停展开 5 张模拟卡片调 UI |
 | 新任务的排列位置 | 最新在前 / 最新在后 | 最新在前 | 多条任务时最新出现的排顶部还是底部（`newest-first` 会把 Host 的插入顺序反转） |
 | 最多同时显示条数 | 1–6 | 3 | 通过 CSS 变量 `--ddp-rows` 控制 `max-height`，超出滚动 |
@@ -390,6 +398,44 @@ var(--ddp-ripple) 0%, transparent 62%)`，平时 `opacity:0`，只有 `.ddp-ease
 
 `outMs` 是给 `usePresence` 用的：宿主必须在退出动画播完前保持节点挂载，`none` 填 `0` 就立即卸载。
 
+### 3.3 对话框简易条（`conversation.input.left`）
+
+用户 2026-10-22 追加的第二形态：有人嫌顶部弹出的浮层吵，希望进度「安静地长在输入框上」。
+
+**槽位**：`ctx.slots.register({ name: 'conversation.input.left', id: 'dsh-download-progress', order: 2000 }, InlineBar)`，
+就是「完全权限」那一行所在的 **list 槽位**。
+
+**唯一的硬约束是「不要挤别人」**（同一行还住着额度条、技能 chip 等）：
+
+- 根节点 `flex:0 0 auto`，宽 `max-width:min(240px,40vw)` —— 只占自己要的宽度，绝不 `flex:1`；
+- 一行放不下时先牺牲自己：轨道 `flex:0 1 auto`（`min-width:36px`，首选 64px），
+  文字 `flex:0 1 auto` + `ellipsis`；
+- `order:2000` 排在这些已知邻居之后（额度 4、技能 chip 1000），后来的插件挑更大 order 就能把它往后推；
+- **本会话没有任务时 `return null`** —— 不渲染空 chip，空闲时那一行一个像素都不占。
+
+**极简内容**（需求原文：一条进度条 + 速度，不显示详情，悬停才给百分比）：
+
+| 情况 | 画什么 |
+| --- | --- |
+| 下载且有总大小 | 细轨道 + 填充 + 速度；百分比只在 `.ddp-mx-tip` 里，`:hover` 才淡入 |
+| 拿不到进度（搜索/抓取/安装/下载未知大小） | 脉动小圆点 + 任务类型文案：`搜索中...` / `抓取中...` / `安装中...` / `下载中...` / `处理中...` |
+| 同会话多个任务 | 跟最早那条走，右侧 `+N` 数字 chip（22px 高的行画堆叠条只会更难读） |
+| 关掉「显示下载速度」 | 只留条（不确定态只留文案），不印速率 |
+
+**只显示当前会话**：用槽位自己传下来的 `props.sessionId` 过滤（`sessionKeyOf(task) === sessionId`），
+不是用 `currentOnly` 那套 `useSessions` 探测——它长在哪个输入框上就只报那个会话，切会话天然跟着换。
+
+**主题共用**：根节点 `style={themeTokens(settings.theme)}`，跟 `Overlay` 同一个注册表（`THEMES` /
+`--ddp-*`）；新增一条 `--ddp-mx-bg` / `--ddp-mx-border` / `--ddp-mx-glass` 就够给简易条单独调材质，
+不填就跟随 `--ddp-fg` / `--ddp-accent` 等既有 token。
+
+**显示方式开关**：`settings.display` = `overlay`（默认，行为与升级前完全一致）/ `inline` / `both`。
+`overlay` 时简易条**一个节点都不注册渲染**（`wantsInline` 为假 → `return null`，连轮询都不开）；
+`inline` 时 `Overlay` 自己返回 `null`。两种形态各自独立判空，不会同时抢屏。
+
+**hooks 顺序**：`InlineBar` 里 `useSettings` / `useTasks` 全在顶部，`return null` 只出现在它们之后——
+与 §5.4 同一条规矩，`smoke.mjs` 的 hook 计数守卫也覆盖了它。
+
 ---
 
 ## 4. 数据契约
@@ -433,6 +479,8 @@ var(--ddp-ripple) 0%, transparent 62%)`，平时 `opacity:0`，只有 `.ddp-ease
 ### 5.1 已知的脆弱点（升级时优先看这里）
 
 - **`shell.overlay` 槽位名**：若上游改名，`slots.register` 会失败（表现为浮层不出现，不影响 DSH）。
+- **`conversation.input.left` 槽位名或传入的 `sessionId`**：前者改名则简易条不出现；后者缺失时
+  简易条**整个不渲染**（拿不到会话就没法只显示本会话，宁可空白也不串会话）。
 - **`tools/execute` 签名**：若 waterfall 签名变了，`classify()` 拿不到 `exec.name/arguments` 就静默不触发。
 - **`plugin-manager/install-log` 载荷字段**：用的是 `chunk.text`，若改字段名则安装日志行变空（进度条本身仍在）。
 - **命令行解析是启发式的**：curl/wget 参数组合极多，未覆盖的写法会退化成"不触发"或"载入中"。
@@ -601,9 +649,9 @@ node smoke.mjs
 node smoke-host.mjs
 ```
 
-`smoke.mjs` 在假的 `window` 里加载 `client.js`，用极简 React 替身把两个槽位各渲染一次，
+`smoke.mjs` 在假的 `window` 里加载 `client.js`，用极简 React 替身把三个槽位各渲染一次，
 断言：5 种任务形态的文案、只有已知总大小才出百分比、`--ddp-rows` 来自设置、
-设置页有 7 个配置项（3 个复选框 + 4 个下拉 + 1 个重置按钮）、调试模式默认关，
+设置页有 9 个配置项（3 个复选框 + 6 个下拉 + 1 个重置按钮）、调试模式默认关，
 以及浮层状态机：**调试模式关 + 无任务 = 什么都不渲染**、**调试模式开 + 无任务 = 只有把手**、
 **悬停把手展开 5 张示例卡**、**180ms 宽限期内回到卡片不收起**、**离开并等过宽限期才收起**、
 **有真实任务时只显示真实卡片且把手隐藏**、**拖把手 40px 只移动 40px（不额外上跳 12px）**，
@@ -613,6 +661,12 @@ node smoke-host.mjs
 以及出现动画：**默认 `float`**、**下拉切到任意 id（`crt` / `ripple` / `slide` / `drop` / `pop` /
 `wipe` / `flip` / `spin` / `blur` / `none`）时每张卡片的 `ddp-ease-*` 类跟着变**、**动画类只在卡片上，
 容器不带**、**入场按 55ms 错峰**。`smoke.mjs` 会遍历下拉框逐 id 断言这三件事，加新动画自动覆盖。
+
+简易条另有一组断言（`---- inline bar ----`）：**注册进 `conversation.input.left`（order 2000）**、
+**`display=overlay` 时工具行里没有 chip**、**别的会话 / 没有会话时什么都不渲染**、
+**确定态 = 条 + 速率 + 悬停百分比、且没有详情行**、**`display=inline` 时浮层不渲染任何东西**、
+**不确定态 = 圆点 + 任务类型文案**、**多任务带 `+N`**、**关掉速度开关后不印速率**、
+**主题 token 能到 chip 上**。改简易条跑一次就知道有没有改崩。
 改完 UI 跑一次就知道有没有改崩。
 
 `smoke-host.mjs` 则直接 import 三个 Host 模块（`utils.js` / `detect.js` / `state.js`，都不依赖宿主），
@@ -655,7 +709,7 @@ node smoke-host.mjs
 
 | 优势 | 具体表现 |
 | --- | --- |
-| **零核心改动** | 不 patch 宿主、不改 `cordis.yml`、不碰 `agent-loop`。用的是官方公开的 4 个扩展点：`tools/execute` 瀑布钩子、`plugin-manager/install-log` 事件、`webServer.register` 路由、`shell.overlay` / `settings.section` 插槽。宿主升级时这些名字变了才会坏，见 §5.1 |
+| **零核心改动** | 不 patch 宿主、不改 `cordis.yml`、不碰 `agent-loop`。用的是官方公开的扩展点：`tools/execute` 瀑布钩子、`plugin-manager/install-log` 事件、`webServer.register` 路由、`shell.overlay` / `settings.section` / `conversation.input.left` 插槽。宿主升级时这些名字变了才会坏，见 §5.1 |
 | **零第三方依赖** | Host 半只用 `node:fs` / `node:path`；Client 半只用宿主已提供的 `react`。没有 npm 依赖，没有构建步骤，`git clone` 下来就能装 |
 | **不绑会话、跟着文件走** | 用户把 `curl` 丢进后台（`run_in_background`）后工具会提前返回，插件不看工具何时结束，而是看**文件是否还在变大**——最后 3 秒没长才收起。这是唯一能覆盖后台下载的信号 |
 | **UI 与逻辑彻底分离** | 全部样式集中在 `client.js` 顶部的 `CSS` 常量和一个 `<style>` 注入点，所有颜色走 `--ddp-*` / `--dsw-alias-*` 变量。改外观不动一行逻辑，换主题只加一个 token 对象 |
