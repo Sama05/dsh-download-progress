@@ -99,17 +99,19 @@ window.__ModuleLoader__.load({
   overflow-y:auto;overflow-x:hidden;
   /* A little air on all sides: the cards are separated by their own border now,
      so they must not sit flush against the scroll viewport edge. */
-  padding:4px;scrollbar-width:thin;
+  padding:4px;
+  /* No scrollbar, by design. A classic scrollbar takes layout width, so crossing
+     the row cap would narrow every card by 6px and re-wrap the log line mid-poll
+     — a quiet jitter that looks like a rendering bug. The list still scrolls by
+     wheel / trackpad; only the track is hidden. */
+  scrollbar-width:none;-ms-overflow-style:none;
   cursor:grab;
 }
 .ddp-list:active{cursor:grabbing}
 /* While dragging, text selection and hover tips would fight the gesture. */
 .ddp-wrap--drag .ddp-list{cursor:grabbing;user-select:none}
 .ddp-wrap--drag .ddp-tip{opacity:0 !important}
-.ddp-list::-webkit-scrollbar{width:6px}
-.ddp-list::-webkit-scrollbar-thumb{
-  background:var(--ddp-scroll,var(--dsw-alias-scrollbar-bg-l2,rgba(255,255,255,.18)));border-radius:999px;
-}
+.ddp-list::-webkit-scrollbar{width:0;height:0}
 /* Enter / exit. Applied per card, not to the list: the point is that each bar
    lights up / powers down on its own, so the stack never scales as one block and
    a newly added download animates by itself without replaying the others.
@@ -429,7 +431,6 @@ window.__ModuleLoader__.load({
         '--ddp-track-bg': 'rgba(0,0,0,.10)',
         '--ddp-pop-bg': '#ffffff',
         '--ddp-pop-border': 'rgba(0,0,0,.14)',
-        '--ddp-scroll': 'rgba(0,0,0,.18)',
         '--ddp-inner-hi': 'rgba(255,255,255,.55)',
         // No brightness lift in light mode: it pushed the pane toward paper white.
         '--ddp-glass': 'blur(24px) saturate(180%)',
@@ -448,7 +449,6 @@ window.__ModuleLoader__.load({
         '--ddp-track-bg': 'rgba(255,255,255,.13)',
         '--ddp-pop-bg': '#2a2a30',
         '--ddp-pop-border': 'rgba(255,255,255,.14)',
-        '--ddp-scroll': 'rgba(255,255,255,.18)',
         '--ddp-inner-hi': 'rgba(255,255,255,.13)',
         '--ddp-glass': 'blur(24px) saturate(180%) brightness(1.06)',
         '--ddp-sheen': 'rgba(255,255,255,.08)',
@@ -960,6 +960,12 @@ window.__ModuleLoader__.load({
       return {
         x: Math.round(left),
         y: Math.round(top),
+        // Half the width, so the drag renderer can place the CENTRE in pixels and
+        // keep `translateX(-50%)` on the wrapper the whole time. Switching the
+        // transform on drop (none → -50%) would shift the wrapper by half a card
+        // for one transition while `left` slid the other way — the visible "jump
+        // left, then snap back" after releasing the mouse.
+        half: width / 2,
         // Where the card's CENTRE sits, as a percentage of the viewport. This is
         // what gets persisted: the renderer resolves it against the live window
         // size, so resizing keeps the relative position with no JS involved.
@@ -1151,19 +1157,22 @@ window.__ModuleLoader__.load({
       if (safeTasks.length) held.list = safeTasks
       const shown = safeTasks.length ? safeTasks : held.list
 
-      // Horizontal placement. While dragging, the raw pixel offset is used so
-      // the card tracks the pointer exactly; once dropped, the stored percentage
-      // takes over and the browser resolves it against the live window width.
+      // Horizontal placement. The wrapper is ALWAYS centred with
+      // `translateX(-50%)`, and `left` always names the card's centre — pixels
+      // while dragging, a percentage once dropped. Keeping the transform
+      // constant matters: `left` is on a 180ms transition, the transform is not.
+      // Flipping the transform at the drop instant (none ⇄ translateX(-50%))
+      // while `left` was still easing to its new value shifted the card half a
+      // width instantly and then slid it back — the "jumps left, then snaps
+      // back" flicker seen right after releasing the mouse.
       const position = { top: (drag ? drag.y : settings.y) + 'px' }
+      position.transform = 'translateX(-50%)'
       if (drag) {
-        position.left = drag.x + 'px'
-        position.transform = 'none'
+        position.left = drag.x + drag.half + 'px'
       } else if (settings.x === null) {
         position.left = '50%'
-        position.transform = 'translateX(-50%)'
       } else {
         position.left = settings.x + '%'
-        position.transform = 'translateX(-50%)'
       }
       // Theme = custom properties on the wrapper. 'auto' contributes nothing, so
       // each rule falls through to the host token it already had.

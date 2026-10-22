@@ -581,6 +581,29 @@ if (dragStyle.transform !== 'translateX(-50%)')
   throw new Error('a percentage left must pair with translateX(-50%) so the CENTRE lands there')
 console.log('  ok dropped position renders as a viewport percentage')
 
+/* ---- the transform must NEVER flip, dragging or not ---- */
+// `left` transitions over 180ms; `transform` does not. Switching the transform
+// at the drop instant (none ⇄ translateX(-50%)) shifted the card half a width
+// instantly while `left` was still easing — the "jumps left, then snaps back"
+// flicker seen right after releasing the mouse. So `left` always names the
+// CENTRE and the transform is constant, in every branch.
+if (src.indexOf("position.transform = 'translateX(-50%)'") < 0)
+  throw new Error('the wrapper must always be centred with translateX(-50%)')
+if (/position\.transform\s*=\s*'none'/.test(src))
+  throw new Error('the transform must not be reset to none while dragging: it flips on drop and jitters')
+if (src.indexOf('position.left = drag.x + drag.half') < 0)
+  throw new Error('a dragged card must place its CENTRE in pixels, i.e. drag.x + drag.half')
+console.log('  ok drag and drop share one transform, so nothing shifts on release')
+
+/* ---- no visible scrollbar: the track would take layout width ---- */
+// Crossing the row cap would then narrow every card by the scrollbar width and
+// re-wrap the log line mid-poll.
+if (src.indexOf('scrollbar-width:none') < 0)
+  throw new Error('the list must hide its scrollbar track (scrollbar-width:none)')
+if (src.indexOf('::-webkit-scrollbar-thumb') >= 0)
+  throw new Error('a scrollbar thumb rule means a visible track; the list must scroll without one')
+console.log('  ok the list scrolls without reserving a scrollbar gutter')
+
 /* ---- a live resize drops the backdrop blur (the expensive half) ---- */
 if (!(listeners.resize || []).length)
   throw new Error('the overlay must listen for window resize: stale pixels + per-frame re-blur')
