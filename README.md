@@ -177,7 +177,7 @@ localStorage['dsh-download-progress:themes'] = JSON.stringify([
 
 ## 开发与测试
 
-改完可跑四个离线脚本（`smoke.mjs` / `smoke-host.mjs` / `stress-client.mjs` / `stress-host.mjs`）自检，不需要浏览器或 DSH 进程。实现细节见 [NOTES-FOR-AI.md](NOTES-FOR-AI.md)。
+改完可跑五个离线脚本（`smoke.mjs` / `smoke-host.mjs` / `stress-client.mjs` / `stress-host.mjs` / `stress-round2.mjs`）自检，不需要浏览器或 DSH 进程。实现细节见 [NOTES-FOR-AI.md](NOTES-FOR-AI.md)。
 
 ---
 
