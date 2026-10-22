@@ -23,6 +23,15 @@ window.__ModuleLoader__.load({
     const ROUTE = '/download-progress/state'
     const POLL_MS = 1000
     /**
+     * Highest `schemaVersion` this bundle has seen on the wire.
+     *
+     * Only a diagnostic: the store never refuses a frame because of it (an
+     * additive field is a legal change, see CONTRACT.md). It exists so a
+     * mismatch can be reported instead of silently looking like "the UI is
+     * just not updating".
+     */
+    let SCHEMA_VERSION_SEEN = 1
+    /**
      * Consecutive failed polls before the last frame is dropped.
      *
      * A host that is restarting (or a route that briefly 502s) should not blank the
@@ -1166,6 +1175,33 @@ window.__ModuleLoader__.load({
         if (++this.failures >= POLL_FAILURES_BEFORE_CLEAR) this.publish([])
       },
 
+      /**
+       * Turn one wire body into the task array this store publishes.
+       *
+       * The body is `{ schemaVersion, tasks }` (see CONTRACT.md). A body with a
+       * NEWER version than this bundle understands is still rendered: an
+       * additive field the UI has never heard of is exactly the case the
+       * contract is designed to allow, and refusing the frame would blank the
+       * overlay for a purely cosmetic mismatch. A body with no version at all
+       * is an older host; `tasks` is the only thing that ever existed, so it is
+       * read directly.
+       *
+       * @param {unknown} data
+       * @returns {object[]}
+       */
+      adopt(data) {
+        if (Array.isArray(data)) return data
+        if (!data || typeof data !== 'object') return []
+        const tasks = data.tasks
+        if (!Array.isArray(tasks)) return []
+        const version = Number(data.schemaVersion)
+        // Forward compatibility is deliberate: never gate the frame on it.
+        if (Number.isFinite(version) && version > SCHEMA_VERSION_SEEN) {
+          SCHEMA_VERSION_SEEN = version
+        }
+        return tasks
+      },
+
       tick() {
         if (typeof document !== 'undefined' && document.hidden) return
         fetch(stateUrl(), { cache: 'no-store' })
@@ -1177,7 +1213,7 @@ window.__ModuleLoader__.load({
               return
             }
             this.failures = 0
-            this.publish(Array.isArray(data.tasks) ? data.tasks : [])
+            this.publish(this.adopt(data))
           })
           .catch(() => {
             /* the host route is optional: stay silent when it is absent */

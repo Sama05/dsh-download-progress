@@ -22,6 +22,10 @@
     "node": ">=18",
     "dsh": ">=0.2.0-rc.1"
   },
+  "scripts": {
+    "test": "node contract.mjs && node smoke.mjs && node smoke-host.mjs && node stress-host.mjs && node stress-round2.mjs && node stress-client.mjs",
+    "contract": "node contract.mjs"
+  },
   "files": [
     "index.js",
     "utils.js",
@@ -31,7 +35,8 @@
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
-    "README.md"
+    "README.md",
+    "CONTRACT.md"
   ],
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },

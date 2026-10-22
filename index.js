@@ -28,6 +28,16 @@ const ROUTE_PATH = '/download-progress/state'
 /** Sampling period. Matches the client's poll rate so no byte growth is missed. */
 const TICK_MS = 1000
 
+/**
+ * Wire contract version for the snapshot body.
+ *
+ * Bump this when a field is REMOVED or its meaning changes. Adding a field is
+ * not a bump: the Client half ignores what it does not read, so a new field
+ * ships without touching the UI. See CONTRACT.md for the field table and for
+ * the rule about who is allowed to read which field.
+ */
+const SCHEMA_VERSION = 1
+
 export const inject = ['webServer']
 
 /**
@@ -151,11 +161,11 @@ export function apply(ctx) {
       handler: (_req, res) => {
         let body
         try {
-          body = JSON.stringify({ tasks: snapshot() })
+          body = JSON.stringify({ schemaVersion: SCHEMA_VERSION, tasks: snapshot() })
         } catch {
           // A task with a circular reference would be a bug, but the overlay
           // must never blank out because of it.
-          body = '{"tasks":[]}'
+          body = JSON.stringify({ schemaVersion: SCHEMA_VERSION, tasks: [] })
         }
         res.writeHead(200, {
           'content-type': 'application/json; charset=utf-8',
