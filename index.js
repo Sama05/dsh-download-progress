@@ -20,6 +20,19 @@ import {
   snapshot,
   sweep,
 } from './state.js'
+import {
+  backgroundSnapshot,
+  noteJobEvent,
+  noteSubagentEnd,
+  noteSubagentStart,
+  noteToolEnd,
+  noteToolStart,
+  noteWorkflowEnd,
+  noteWorkflowLog,
+  noteWorkflowPhase,
+  noteWorkflowStart,
+  setTitleLookup,
+} from './background.js'
 import { text } from './utils.js'
 
 /** Where the Client half polls. Served by the host's own web server. */
@@ -100,8 +113,15 @@ export function apply(ctx) {
   // Session names for the per-session grouping on the overlay. Cleared on
   // disposal so a disabled plugin cannot hold a reference to the host services.
   ctx.effect(() => {
-    setTitleResolver(makeTitleResolver(ctx))
-    return () => setTitleResolver(null)
+    const resolve = makeTitleResolver(ctx)
+    setTitleResolver(resolve)
+    // The background rows label themselves with the same names, so they share
+    // one lookup instead of building a second, subtly different one.
+    setTitleLookup(resolve)
+    return () => {
+      setTitleResolver(null)
+      setTitleLookup(() => '')
+    }
   })
 
   // The sampler. Wrapped in ctx.effect so disabling the plugin stops the timer.
@@ -124,14 +144,20 @@ export function apply(ctx) {
   // task — is wrapped, and each failure path still calls `next()`. A bookkeeping
   // plugin that can break the tool call it is only supposed to watch would be a
   // worse bug than never showing a bar at all.
+  //
+  // The tool call is ALSO recorded even when it is not a transfer. That record is
+  // what lets a background row say "the agent is blocked on me" instead of the
+  // weaker "something is running": the handler is suspended for exactly as long
+  // as the tool is, so `activeTools` is a truthful picture of who is stuck where.
   ctx.on('tools/execute', async (exec, next) => {
+    const sessionId = String(exec?.agent?.id || '')
     let task = null
     try {
+      noteToolStart(sessionId, exec?.name, exec?.arguments)
       const plan = classify(exec)
-      if (!plan) return await next()
-      task = beginTask(exec, plan, await resolveCwd(ctx, exec))
+      if (plan) task = beginTask(exec, plan, await resolveCwd(ctx, exec))
     } catch {
-      return next()
+      /* observation only: the call must proceed regardless */
     }
 
     try {
@@ -141,9 +167,14 @@ export function apply(ctx) {
       // growing — see sweep(). That is what keeps background downloads visible.
       // A failure here must not mask the tool's own result or error.
       try {
-        task.done = true
+        if (task) task.done = true
       } catch {
         /* the task object is ours; this cannot fail in practice */
+      }
+      try {
+        noteToolEnd(sessionId)
+      } catch {
+        /* same: bookkeeping only */
       }
     }
   })
@@ -151,6 +182,43 @@ export function apply(ctx) {
   // Plugin installs: pnpm streams log chunks and phase changes, no byte counts.
   ctx.on('plugin-manager/install-log', noteInstallLog)
   ctx.on('plugin-manager/install-state', noteInstallPhase)
+
+  /* ---- background work: jobs, subagents, workflows ---- */
+
+  // Bash background jobs. `owners: 'all'` is the only filter that spans
+  // sessions; a per-owner subscription would need to know every session id in
+  // advance and would miss the first job of a session created later.
+  //
+  // The service is optional: a host without the jobs plugin simply has no
+  // background rows, which must not stop the plugin from loading.
+  ctx.effect(() => {
+    const jobs = ctx.get('jobs')
+    if (!jobs || !jobs.events || typeof jobs.events.subscribe !== 'function') {
+      return undefined
+    }
+    let dispose = null
+    try {
+      dispose = jobs.events.subscribe({ owners: 'all' }, noteJobEvent)
+    } catch {
+      return undefined
+    }
+    return () => {
+      try {
+        if (typeof dispose === 'function') dispose()
+      } catch {
+        /* the service may already be gone */
+      }
+    }
+  })
+
+  // Subagents and workflows. Both are emitted process-wide; ownership is
+  // inferred in background.js from the tool the parent is blocked in.
+  ctx.on('subagent/start', noteSubagentStart)
+  ctx.on('subagent/end', noteSubagentEnd)
+  ctx.on('workflow/start', noteWorkflowStart)
+  ctx.on('workflow/phase', noteWorkflowPhase)
+  ctx.on('workflow/log', noteWorkflowLog)
+  ctx.on('workflow/end', noteWorkflowEnd)
 
   // The snapshot route the Client half polls. `no-store` because the body is
   // meaningless one second later.
@@ -161,11 +229,15 @@ export function apply(ctx) {
       handler: (_req, res) => {
         let body
         try {
-          body = JSON.stringify({ schemaVersion: SCHEMA_VERSION, tasks: snapshot() })
+          body = JSON.stringify({
+            schemaVersion: SCHEMA_VERSION,
+            tasks: snapshot(),
+            background: backgroundSnapshot(),
+          })
         } catch {
           // A task with a circular reference would be a bug, but the overlay
           // must never blank out because of it.
-          body = JSON.stringify({ schemaVersion: SCHEMA_VERSION, tasks: [] })
+          body = JSON.stringify({ schemaVersion: SCHEMA_VERSION, tasks: [], background: [] })
         }
         res.writeHead(200, {
           'content-type': 'application/json; charset=utf-8',

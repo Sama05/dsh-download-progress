@@ -112,6 +112,13 @@ const CANNED_TASKS_BASE = [
 ]
 let CANNED_TASKS = CANNED_TASKS_BASE
 
+/**
+ * Background rows fed to the same render. Empty by default so every existing
+ * assertion keeps seeing the overlay it always saw; the background block below
+ * fills this in and re-renders to check the new rows.
+ */
+let CANNED_BACKGROUND = []
+
 const React = {
   // Counts hook calls per render so a conditional hook shows up as a changed
   // count instead of a mysterious dead overlay in the browser.
@@ -124,8 +131,19 @@ const React = {
   useState(init) {
     React.__hooks += 1
     const value = typeof init === 'function' ? init() : init
-    // The only list-state in the plugin is the fetched task list.
-    if (Array.isArray(value) && value.length === 0) return [CANNED_TASKS, () => {}]
+    // The plugin's only list-state is the fetched frame: transfers and
+    // background rows together. Seeding both from the canned sets is what makes
+    // one synchronous render exercise every branch below.
+    if (
+      value &&
+      typeof value === 'object' &&
+      Array.isArray(value.tasks) &&
+      value.tasks.length === 0 &&
+      Array.isArray(value.background) &&
+      value.background.length === 0
+    ) {
+      return [{ tasks: CANNED_TASKS, background: CANNED_BACKGROUND }, () => {}]
+    }
     return [value, () => {}]
   },
   useEffect(fn) {
@@ -482,7 +500,7 @@ console.log('  ok enter animation = ddp-ease-<id> per card, staggered, never on 
 /* ---- theme: the wrapper carries --ddp-* overrides, auto carries none ---- */
 // Layout variables are written by the overlay itself, never by a theme, so they
 // are excluded from every "did the theme touch this?" check below.
-const LAYOUT_VARS = ['--ddp-rows', '--ddp-heads']
+const LAYOUT_VARS = ['--ddp-rows', '--ddp-heads', '--ddp-bg']
 const themeKeys = (style) =>
   Object.keys(style || {}).filter((k) => k.indexOf('--ddp-') === 0 && LAYOUT_VARS.indexOf(k) < 0)
 
@@ -1084,7 +1102,52 @@ if (cssBlock.indexOf('border:0') < 0)
 console.log('  ok one path morphs ring -> bar (M+4C in both states), borderless capsule')
 themeDrop.node.props.onChange({ target: { value: 'auto' } })
 displaySelect.node.props.onChange({ target: { value: 'overlay' } })
+/* ---- background work: a flat row, and two honest state words ---- */
+// A background job has no fraction. Drawing a track for it would read as a
+// stalled transfer, so the row is a line with a state word instead. `waiting`
+// is the word that earns the feature: it says the agent's current call is
+// blocked on this row, which "running" deliberately does not.
 CANNED_TASKS = []
+CANNED_BACKGROUND = [
+  { id: 'bg1', type: 'bash', label: 'npm test', status: 'running', elapsedMs: 42000, sessionId: TEST_SESSION },
+  { id: 'bg2', type: 'subagent', label: '市场调研', status: 'running', waiting: true, elapsedMs: 9000, sessionId: TEST_SESSION },
+]
+// Debug mode paints five sample cards regardless of the wire, and an earlier
+// block leaves it on. Turn it off so the card count below measures the rows and
+// nothing else; it is restored right after.
+debugToggle.node.props.onChange({ target: { checked: false } })
+const bgTree = renderOverlay()
+const bgRows = findByClass(bgTree, 'ddp-bgrow')
+if (bgRows.length !== 2) throw new Error('two background rows must render, got ' + bgRows.length)
+const waitingRows = bgRows.filter((r) => /ddp-bgrow--waiting/.test(r.props.className))
+if (waitingRows.length !== 1)
+  throw new Error('exactly the blocked row carries --waiting, got ' + waitingRows.length)
+const bgCards = findByClass(bgTree, 'ddp-card')
+if (bgCards.length !== 0)
+  throw new Error(
+    'background work must not borrow the transfer card: a card promises a fill, got ' + bgCards.length,
+  )
+const bgText = []
+walk(bgTree, 0, bgText)
+if (bgText.indexOf('后台任务') < 0) throw new Error('the block needs its heading')
+if (bgText.indexOf('等待中') < 0 || bgText.indexOf('运行中') < 0)
+  throw new Error('the two states must read differently, got ' + JSON.stringify(bgText.map(String)))
+if (bgTree.props.style['--ddp-bg'] === '0px')
+  throw new Error('the wrapper must reserve height for the background rows')
+console.log('  ok background: flat rows, waiting vs running, own height allowance')
+
+// The chip: a transfer outranks background work, and when nothing transfers the
+// chip is exactly where "the agent is waiting on something" belongs. An earlier
+// block parks the display mode on overlay, so bring the composer bar back.
+displaySelect.node.props.onChange({ target: { value: 'both' } })
+const bgInline = renderInline()
+const bgInlineText = []
+walk(bgInline, 0, bgInlineText)
+console.log('  background chip =', JSON.stringify(bgInlineText.map(String)))
+if (bgInlineText.join(' ').indexOf('等待后台任务') < 0)
+  throw new Error('a blocked background row must claim the chip when nothing transfers')
+displaySelect.node.props.onChange({ target: { value: 'overlay' } })
+CANNED_BACKGROUND = []
 
 console.log('\nSMOKE OK — bundle loads,', Object.keys(injectors).length, 'slots register, settings page renders', texts.length, 'text nodes')
 

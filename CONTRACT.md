@@ -78,11 +78,39 @@ index.js   路由 /download-progress/state  views              只吃 view-model
 
 只动 `views`。如果发现必须读一个新字段，那是**加**字段：Host 加、本文档加、adapter 加一行，视图仍只读 view-model。
 
-## 新增：后台任务（规划中）
+## 后台任务
 
-下一版会在同一路由里加 `background[]`，描述正在跑的后台工作（bash job / 子代理 / workflow）。它沿用同一套规则：加字段不升版本，视图通过新的 adapter（`describeBackground`）读取。
+同一路由里还有 `background[]`，描述正在跑、但没有进度可画的后台工作（bash 后台 job / 子代理 / workflow）。它沿用同一套规则：加字段不升版本，视图只通过 `describeBackground` 读它。
 
-判定要点：
+```json
+{ "schemaVersion": 1, "tasks": [ /* ... */ ], "background": [ /* 见下表 */ ] }
+```
 
-- `status === 'running'` 表示后台任务在跑
-- `waiting === true` 表示 agent 当前 step 阻塞在等它 —— 这和「在跑」是两件事，UI 用不同文案
+`background[]` 每一项：
+
+| 字段 | 类型 | 含义 |
+| `id` | string | 后台任务 id（job id / 子代理 id / workflow run id） |
+| `type` | string | `job` / `subagent` / `workflow` |
+| `label` | string | 给人看的短名，Host 已保证非空 |
+| `detail` | string | 一行补充（job 的 progress 行、子代理的 provider、workflow 的当前 phase） |
+| `sessionId` | string | 归属会话 id；解析不到为空串 |
+| `sessionTitle` | string | 会话显示名，规则同 `tasks[].sessionTitle` |
+| `status` | string | `running` / `stopping` / `done` / `failed` |
+| `waiting` | boolean | **关键区分**：agent 当前 step 正阻塞在等它 |
+| `startedAt` | number | 开始时间（epoch ms），Host 推断不出来时取首帧时间 |
+| `elapsedMs` | number | 已耗时，Host 每帧现算 |
+
+`status` 与 `waiting` 是两件事，UI 用两套文案：
+
+- `status === 'running'` → 「后台运行中」
+- `waiting === true` → 「等待后台任务」：agent 停了，是在等它，不是在干活
+
+`waiting` 由 Host 推断：`jobs` 的 owner 上若有正在执行的工具调用，且那个调用不是起 job 的 `bash` 本身，就认为它在等。子代理 / workflow 由 `tools/execute` 的当前工具名判定。
+
+### 谁是 background 的 adapter
+
+| 函数 | 产出 |
+| `describeBackground(row)` | 一行 view-model：`{ label, detail, state, waiting, meta, type }` |
+| `backgroundBrief(rows)` | 简易条 view-model，形状同 `briefOf`，`shape` 固定 `ring` |
+
+背景行**不画进度条**：它没有分数，画一条不动的轨道比一句状态更糟。

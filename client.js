@@ -105,7 +105,7 @@ window.__ModuleLoader__.load({
      a ceiling for short windows — without it a 6-row budget overflows the viewport
      once the overlay is dragged near an edge. */
   max-height:min(
-    calc(var(--ddp-rows) * 62px + (var(--ddp-rows) - 1) * 8px + 6px + var(--ddp-heads, 0px)),
+    calc(var(--ddp-rows) * 62px + (var(--ddp-rows) - 1) * 8px + 6px + var(--ddp-heads, 0px) + var(--ddp-bg, 0px)),
     calc(100vh - 48px)
   );
   overflow-y:auto;overflow-x:hidden;
@@ -120,6 +120,39 @@ window.__ModuleLoader__.load({
   cursor:grab;
 }
 .ddp-list:active{cursor:grabbing}
+/* Background work: a plain line, not a card. A card promises a track and a
+   fill; a background job has neither, and drawing an empty track would read as
+   a stalled transfer. The waiting modifier is the only emphasis, because that
+   is the row that explains why the agent has gone quiet. */
+.ddp-bgblock{display:flex;flex-direction:column;gap:4px;flex:0 0 auto}
+.ddp-bghead{
+  padding:0 4px;font-size:10px;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--ddp-fg-dim,var(--dsw-alias-label-secondary,#a8a8b0));
+}
+.ddp-bgrow{
+  display:flex;align-items:center;gap:6px;min-width:0;
+  padding:5px 8px;border-radius:9px;
+  font-size:12px;line-height:1.35;
+  color:var(--ddp-fg-dim,var(--dsw-alias-label-secondary,#a8a8b0));
+  background:var(--ddp-group-bg,rgba(255,255,255,.045));
+  border:1px solid transparent;
+}
+.ddp-bgrow--waiting{
+  color:var(--ddp-fg,var(--dsw-alias-label-primary,#e8e8ea));
+  border-color:var(--ddp-group-border,rgba(255,255,255,.14));
+}
+.ddp-bgdot{
+  flex:0 0 auto;width:6px;height:6px;border-radius:50%;
+  background:currentColor;opacity:.5;
+}
+.ddp-bgrow--waiting .ddp-bgdot{
+  opacity:1;animation:ddp-bgpulse 1.2s ease-in-out infinite;
+}
+@keyframes ddp-bgpulse{0%,100%{opacity:.35}50%{opacity:1}}
+.ddp-bgname{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.ddp-bgdetail{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.8}
+.ddp-bgstate{flex:0 0 auto;font-variant-numeric:tabular-nums}
+.ddp-bgmeta{flex:0 0 auto;opacity:.7;font-variant-numeric:tabular-nums}
 /* While dragging, text selection and hover tips would fight the gesture. */
 .ddp-wrap--drag .ddp-list{cursor:grabbing;user-select:none}
 .ddp-wrap--drag .ddp-tip{opacity:0 !important}
@@ -1148,8 +1181,15 @@ window.__ModuleLoader__.load({
      * so a session with every surface switched off still makes no requests.
      */
     const taskStore = {
-      /** Last frame, kept so a late subscriber starts from live data. */
-      tasks: [],
+      /**
+       * Last frame, kept so a late subscriber starts from live data.
+       *
+       * A frame is the whole wire body the UI cares about — the transfer list
+       * and the background list together. Keeping them in one object is what
+       * lets both surfaces read one consistent snapshot instead of one surface
+       * showing transfers from t=0 and background from t=1.
+       */
+      frame: { tasks: [], background: [] },
       /** Readers to notify on every frame. */
       readers: new Set(),
       /** The one interval, or null while nobody is watching. */
@@ -1158,7 +1198,7 @@ window.__ModuleLoader__.load({
       failures: 0,
 
       publish(next) {
-        this.tasks = next
+        this.frame = next
         for (const reader of this.readers) {
           try {
             reader(next)
@@ -1172,34 +1212,37 @@ window.__ModuleLoader__.load({
         // Keep the last frame through a short blip, drop it once the host is
         // clearly gone — the policy the per-component loop used, now applied
         // once for every surface instead of once per surface.
-        if (++this.failures >= POLL_FAILURES_BEFORE_CLEAR) this.publish([])
+        if (++this.failures >= POLL_FAILURES_BEFORE_CLEAR) {
+          this.publish({ tasks: [], background: [] })
+        }
       },
 
       /**
-       * Turn one wire body into the task array this store publishes.
+       * Turn one wire body into the frame this store publishes.
        *
-       * The body is `{ schemaVersion, tasks }` (see CONTRACT.md). A body with a
-       * NEWER version than this bundle understands is still rendered: an
-       * additive field the UI has never heard of is exactly the case the
-       * contract is designed to allow, and refusing the frame would blank the
-       * overlay for a purely cosmetic mismatch. A body with no version at all
-       * is an older host; `tasks` is the only thing that ever existed, so it is
-       * read directly.
+       * The body is `{ schemaVersion, tasks, background }` (see CONTRACT.md). A
+       * body with a NEWER version than this bundle understands is still
+       * rendered: an additive field the UI has never heard of is exactly the
+       * case the contract is designed to allow, and refusing the frame would
+       * blank the overlay for a purely cosmetic mismatch. A body with no
+       * version at all is an older host, and a bare array is the oldest body
+       * this plugin ever shipped — both are read field by field.
        *
        * @param {unknown} data
-       * @returns {object[]}
+       * @returns {{tasks: object[], background: object[]}}
        */
       adopt(data) {
-        if (Array.isArray(data)) return data
-        if (!data || typeof data !== 'object') return []
-        const tasks = data.tasks
-        if (!Array.isArray(tasks)) return []
+        if (Array.isArray(data)) return { tasks: data, background: [] }
+        if (!data || typeof data !== 'object') return { tasks: [], background: [] }
         const version = Number(data.schemaVersion)
         // Forward compatibility is deliberate: never gate the frame on it.
         if (Number.isFinite(version) && version > SCHEMA_VERSION_SEEN) {
           SCHEMA_VERSION_SEEN = version
         }
-        return tasks
+        return {
+          tasks: Array.isArray(data.tasks) ? data.tasks : [],
+          background: Array.isArray(data.background) ? data.background : [],
+        }
       },
 
       tick() {
@@ -1234,7 +1277,7 @@ window.__ModuleLoader__.load({
       },
 
       /**
-       * Join the shared list.
+       * Join the shared frame.
        *
        * A late subscriber is handed the frame already on screen, so the chip
        * does not blink through an empty list when the overlay mounted first.
@@ -1242,14 +1285,15 @@ window.__ModuleLoader__.load({
        * then not a state change, which keeps "no news" distinguishable from
        * "the list just emptied".
        *
-       * @param {(tasks: object[]) => void} reader
+       * @param {(frame: {tasks: object[], background: object[]}) => void} reader
        * @returns {() => void} unsubscribe
        */
       subscribe(reader) {
         this.readers.add(reader)
-        if (this.tasks.length > 0) {
+        const idle = this.frame.tasks.length === 0 && this.frame.background.length === 0
+        if (!idle) {
           try {
-            reader(this.tasks)
+            reader(this.frame)
           } catch {
             /* one broken reader must not starve the others */
           }
@@ -1262,26 +1306,28 @@ window.__ModuleLoader__.load({
       },
     }
 
+    const EMPTY_FRAME = { tasks: [], background: [] }
+
     /**
-     * Read the shared task list.
+     * Read the shared frame.
      *
      * `enabled` false means "this surface is off": it unsubscribes and reports
      * nothing. That is what lets a disabled overlay leave the chip's loop
      * running without drawing anything itself.
      *
      * @param {boolean} enabled
-     * @returns {object[]}
+     * @returns {{tasks: object[], background: object[]}}
      */
     function useTasks(enabled) {
-      const [tasks, setTasks] = React.useState([])
+      const [frame, setFrame] = React.useState(EMPTY_FRAME)
       React.useEffect(() => {
         if (!enabled) {
-          setTasks([])
+          setFrame(EMPTY_FRAME)
           return undefined
         }
-        return taskStore.subscribe(setTasks)
+        return taskStore.subscribe(setFrame)
       }, [enabled])
-      return tasks
+      return frame
     }
 
     /* ---------------- overlay view ---------------- */
@@ -1730,6 +1776,106 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Flatten one background row into what a row paints.
+     *
+     * Background work has no fraction, so there is deliberately no `percent`
+     * here: a progress bar that cannot move is worse than a word. The state
+     * word is the payload, and `waiting` is the distinction that makes it
+     * honest — see `backgroundBrief` for why.
+     *
+     * @param {object} row
+     */
+    function describeBackground(row) {
+      const waiting = row.waiting === true
+      const status = String(row.status || '')
+      const elapsed = secs(row.elapsedMs)
+      const state = waiting
+        ? '等待中'
+        : status === 'stopping'
+          ? '停止中'
+          : status === 'done'
+            ? '已完成'
+            : status === 'failed'
+              ? '失败'
+              : '运行中'
+      return {
+        label: String(row.label || '后台任务'),
+        detail: String(row.detail || ''),
+        state,
+        waiting,
+        meta: elapsed > 0 ? elapsed + 's' : '',
+        type: String(row.type || ''),
+      }
+    }
+
+    /**
+     * One background row inside the overlay list.
+     *
+     * A flat line rather than a card: a card promises a track and a fill, and
+     * this has neither. The tint marks `waiting` so the eye lands on the one
+     * row that explains why the agent is quiet.
+     */
+    function BackgroundRow(props) {
+      const view = describeBackground(props.row || {})
+      return h(
+        'div',
+        {
+          className: cx('ddp-bgrow', view.waiting && 'ddp-bgrow--waiting'),
+          title: view.detail || view.label,
+        },
+        h('span', { className: 'ddp-bgdot', 'aria-hidden': 'true' }),
+        h('span', { className: 'ddp-bgname' }, view.label),
+        view.detail ? h('span', { className: 'ddp-bgdetail' }, view.detail) : null,
+        h('span', { className: 'ddp-bgstate' }, view.state),
+        view.meta ? h('span', { className: 'ddp-bgmeta' }, view.meta) : null,
+      )
+    }
+
+    /**
+     * Compact presenter for background work, or null when there is none.
+     *
+     * Same output shape as `briefOf`, so the chip can switch between "a
+     * transfer" and "the agent is waiting on something" without the view
+     * knowing which it is holding.
+     *
+     * The distinction this preserves is the point of the feature: `waiting`
+     * means the agent's current tool call is blocked on this row, `running`
+     * only means it is still going. A chip that called both "waiting" would be
+     * lying half the time.
+     *
+     * @param {object[]} rows background rows from the wire
+     * @returns {object|null}
+     */
+    function backgroundBrief(rows) {
+      const list = Array.isArray(rows)
+        ? rows.filter((row) => row && typeof row === 'object')
+        : []
+      if (list.length === 0) return null
+
+      const waiting = list.filter((row) => row.waiting === true)
+      const live = list.filter((row) => row.status === 'running' || row.status === 'stopping')
+      const head = waiting[0] || live[0] || list[0]
+      const label = waiting.length > 0 ? '等待后台任务' : '后台运行中'
+      const count = (live.length || list.length) - 1
+
+      const bits = [label]
+      const name = String(head.label || '')
+      if (name) bits.push(name.length > 16 ? name.slice(0, 15) + '…' : name)
+      if (count > 0) bits.push('+' + count)
+      const elapsed = secs(head.elapsedMs)
+      if (elapsed > 0) bits.push(elapsed + 's')
+
+      return {
+        // The ring, not the bar: background work has no fraction to draw.
+        shape: 'ring',
+        percent: null,
+        rate: '',
+        tip: bits.join(' · '),
+        aria: { 'aria-valuetext': label },
+      }
+    }
+
+    /**
      * Compact presenter for the composer's tool row.
      *
      * Three inputs decide what it paints: the slot's own `sessionId` (so it can
@@ -1763,11 +1909,18 @@ window.__ModuleLoader__.load({
     function InlineBar(props) {
       const settings = useSettings()
       const wantsInline = settings.display === 'inline' || settings.display === 'both'
-      const tasks = useTasks(Boolean(settings.enabled && wantsInline))
+      const frame = useTasks(Boolean(settings.enabled && wantsInline))
+      const tasks = frame.tasks
+      const background = frame.background
 
       const sessionId = String((props && props.sessionId) || '')
       const mine = (Array.isArray(tasks) ? tasks : []).filter(
         (task) => task && typeof task === 'object' && sessionKeyOf(task) === sessionId,
+      )
+      // Background work for THIS session only: another session's job is not
+      // this chip's business, and the row it sits in belongs to one composer.
+      const mineBackground = (Array.isArray(background) ? background : []).filter(
+        (row) => row && typeof row === 'object' && String(row.sessionId || '') === sessionId,
       )
 
       // Hooks are all above this line: the early returns below must never change
@@ -1781,8 +1934,13 @@ window.__ModuleLoader__.load({
       // Several calls in one session: the chip tracks the oldest, and a count
       // says how many others are queued behind it. Drawing a stacked bar for a
       // 22px row would say less than the number does.
+      //
+      // A transfer outranks background work: it is the thing with a number to
+      // show. Background only takes the chip when nothing is transferring,
+      // which is exactly when "the agent is waiting" is the useful message.
       const head = mine[0]
-      const brief = head ? briefOf(head) : IDLE_BRIEF
+      const bg = head ? null : backgroundBrief(mineBackground)
+      const brief = head ? briefOf(head) : bg || IDLE_BRIEF
       const extra = mine.length - 1
 
       const style = themeTokens(settings.theme) || undefined
@@ -1846,7 +2004,9 @@ window.__ModuleLoader__.load({
 
     function Overlay(props) {
       const settings = useSettings()
-      const liveTasks = useTasks(settings.enabled)
+      const frame = useTasks(settings.enabled)
+      const liveTasks = frame.tasks
+      const liveBackground = frame.background
 
       // The session the centre column is showing. Called unconditionally and
       // from a stable prop, so the hook order never changes between renders —
@@ -1870,6 +2030,16 @@ window.__ModuleLoader__.load({
         (task) => task && typeof task === 'object',
       )
       const hasReal = realTasks.length > 0
+      // Background rows keep the overlay alive on their own: "the agent is
+      // waiting on a job" is exactly the case where the user wants to see the
+      // overlay and there is no transfer to show.
+      const realBackground = (Array.isArray(liveBackground) ? liveBackground : []).filter(
+        (row) => row && typeof row === 'object',
+      )
+      const scopedBackground = settings.currentOnly
+        ? realBackground.filter((row) => String(row.sessionId || '') === currentSessionId)
+        : realBackground
+      const hasBackground = scopedBackground.length > 0
       // A download in ANOTHER session still counts for one thing only: it keeps
       // the sample workbench off. Otherwise scoping to a quiet session would
       // summon five fake cards while a real transfer runs next door.
@@ -1995,7 +2165,7 @@ window.__ModuleLoader__.load({
       // the hook count between renders and React would throw "Rendered fewer hooks
       // than expected" — which kills the overlay permanently, so toggling debug
       // mode off and back on could never bring it back.
-      const show = hasReal || (peeking && samples.length > 0)
+      const show = hasReal || hasBackground || (peeking && samples.length > 0)
       const { visible, leaving } = usePresence(show, enterAnimMs(settings.enterAnim))
 
       // While the exit animation runs the list is already empty, so the last
@@ -2052,6 +2222,11 @@ window.__ModuleLoader__.load({
       // so 40px keeps a little slack. The gap COUNT is unchanged by grouping
       // ((N-1) between N cards either way), so nothing else needs adjusting.
       position['--ddp-heads'] = grouped ? runs.length * 40 + 'px' : '0px'
+      // The background block is a header line plus one ~27px row each, and it
+      // sits outside the row budget, so it needs its own height allowance.
+      position['--ddp-bg'] = hasBackground
+        ? scopedBackground.length * 27 + 22 + 'px'
+        : '0px'
 
       // Bail out only here: all hooks above have already run, so the hook count
       // stays identical whether or not anything is painted.
@@ -2061,7 +2236,7 @@ window.__ModuleLoader__.load({
       if (settings.display === 'inline') return null
       // Real downloads always show. Without one, the overlay exists only in debug
       // mode — otherwise it renders nothing at all (not even the grip).
-      if (!hasReal && !canPeek) return null
+      if (!hasReal && !hasBackground && !canPeek) return null
 
       const enter = (event) => {
         // Nothing to peek at unless debug mode is on; a real download keeps the
@@ -2090,7 +2265,7 @@ window.__ModuleLoader__.load({
         })
       }
 
-      const handle = hasReal
+      const handle = hasReal || hasBackground
         ? null
         : h(
             'div',
@@ -2125,6 +2300,18 @@ window.__ModuleLoader__.load({
                 className: 'ddp-list',
                 onPointerDown: beginDrag,
               },
+              // Background rows sit above the transfers: when one of them is
+              // waiting it explains the silence, and it is the shorter list.
+              hasBackground
+                ? h(
+                    'div',
+                    { className: 'ddp-bgblock' },
+                    h('div', { className: 'ddp-bghead' }, '后台任务'),
+                    scopedBackground.map((row, index) =>
+                      h(BackgroundRow, { key: row.id || 'bg-' + index, row }),
+                    ),
+                  )
+                : null,
               grouped
                 ? runs.map((run, index) =>
                     h(Group, {

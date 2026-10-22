@@ -26,6 +26,7 @@ const STATE = read('state.js')
 const CLIENT = read('client.js')
 const INDEX = read('index.js')
 const CONTRACT = read('CONTRACT.md')
+const BACKGROUND = read('background.js')
 
 let failures = 0
 const fail = (message) => {
@@ -66,29 +67,82 @@ function wireFields() {
 const WIRE = wireFields()
 if (WIRE.length === 0) fail('state.js: snapshot() exposes no fields')
 
+/**
+ * Pull the field names out of `backgroundSnapshot()`'s per-row object literal.
+ *
+ * Same textual approach as `wireFields`, for the same reason: the shape is the
+ * promise, and importing the module would run its sampler.
+ */
+function backgroundWireFields() {
+  const start = BACKGROUND.indexOf('export function backgroundSnapshot(')
+  if (start < 0) throw new Error('background.js: backgroundSnapshot() not found')
+  const body = BACKGROUND.slice(start)
+  const open = body.indexOf('rows.push({')
+  if (open < 0) throw new Error('background.js: no rows.push({ ... }) literal')
+  const close = body.indexOf('\n    })', open)
+  if (close < 0) throw new Error('background.js: row literal is not terminated')
+  const literal = body.slice(open, close)
+
+  const fields = []
+  for (const line of literal.split('\n')) {
+    // `key: value,` and the shorthand `key,` (the row literal uses both).
+    const m = /^\s{6}([A-Za-z_$][\w$]*)\s*[:,]/.exec(line)
+    if (m) fields.push(m[1])
+  }
+  return fields
+}
+
+const BG_WIRE = backgroundWireFields()
+if (BG_WIRE.length === 0) fail('background.js: backgroundSnapshot() exposes no fields')
+
 /* ------------------------------------------------------------------ *
  * 2. Documented contract must match the code, field for field.
  * ------------------------------------------------------------------ */
 
-const documented = new Set()
-for (const line of CONTRACT.split('\n')) {
-  // Contract rows look like: `| `bytes` | number | ... |`
-  const m = /^\|\s*`([A-Za-z_$][\w$]*)`\s*\|/.exec(line)
-  if (m) documented.add(m[1])
+/**
+ * Field rows documented inside one section of CONTRACT.md.
+ *
+ * The file has two field tables (transfers and background), so a whole-file
+ * scrape would conflate them and let a field documented in one section excuse
+ * its absence from the other.
+ */
+function documentedFields(fromMarker, toMarker) {
+  const start = CONTRACT.indexOf(fromMarker)
+  if (start < 0) throw new Error('CONTRACT.md: section "' + fromMarker + '" not found')
+  const end = toMarker ? CONTRACT.indexOf(toMarker, start + fromMarker.length) : -1
+  const segment = CONTRACT.slice(start, end < 0 ? CONTRACT.length : end)
+
+  const out = new Set()
+  for (const line of segment.split('\n')) {
+    // Contract rows look like: `| `bytes` | number | ... |`
+    const m = /^\|\s*`([A-Za-z_$][\w$]*)`\s*\|/.exec(line)
+    if (m) out.add(m[1])
+  }
+  return out
 }
 
-for (const field of WIRE) {
-  if (!documented.has(field)) {
-    fail('CONTRACT.md does not document wire field `' + field + '` (added in state.js)')
+function matchDocumented(label, wire, documented) {
+  for (const field of wire) {
+    if (!documented.has(field)) {
+      fail('CONTRACT.md does not document ' + label + ' field `' + field + '` (added in the host)')
+    }
+  }
+  for (const field of documented) {
+    if (!wire.includes(field)) {
+      fail('CONTRACT.md documents ' + label + ' field `' + field + '` but the host no longer sends it')
+    }
   }
 }
-for (const field of documented) {
-  if (!WIRE.includes(field)) {
-    fail('CONTRACT.md documents `' + field + '` but snapshot() no longer sends it')
-  }
-}
+
+const documented = documentedFields('## 字段表', '## 谁是 adapter')
+matchDocumented('transfer', WIRE, documented)
+
+const documentedBackground = documentedFields('## 后台任务', '### 谁是 background 的 adapter')
+matchDocumented('background', BG_WIRE, documentedBackground)
+
 if (failures === 0) {
-  pass('wire contract matches CONTRACT.md (' + WIRE.length + ' fields)')
+  pass('transfer contract matches CONTRACT.md (' + WIRE.length + ' fields)')
+  pass('background contract matches CONTRACT.md (' + BG_WIRE.length + ' fields)')
 }
 
 /* ------------------------------------------------------------------ *

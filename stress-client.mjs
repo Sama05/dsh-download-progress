@@ -30,7 +30,7 @@ const ok = (message) => console.log('  ok ' + message)
  * @param {object} [options.seed]       localStorage seed
  */
 function boot(options = {}) {
-  const { tasks = [], width = 1440, height = 900, seed = {}, fetchImpl } = options
+  const { tasks = [], background = [], width = 1440, height = 900, seed = {}, fetchImpl } = options
   const storage = new Map(Object.entries(seed))
   const listeners = {}
   const timers = []
@@ -77,10 +77,19 @@ function boot(options = {}) {
     useState(init) {
       React.__hooks += 1
       const value = typeof init === 'function' ? init() : init
-      // The task list is the only empty-array state in the plugin; only its
-      // setter is recorded, so unrelated setPeeking/setDrag calls do not pollute
-      // the poll assertions below.
-      if (Array.isArray(value) && value.length === 0) return [tasks, (v) => setCalls.push(v)]
+      // The fetched frame is the only state that starts empty; only its setter
+      // is recorded, so unrelated setPeeking/setDrag calls do not pollute the
+      // poll assertions below.
+      if (
+        value &&
+        typeof value === 'object' &&
+        Array.isArray(value.tasks) &&
+        value.tasks.length === 0 &&
+        Array.isArray(value.background) &&
+        value.background.length === 0
+      ) {
+        return [{ tasks, background }, (v) => setCalls.push(v)]
+      }
       return [value, () => {}]
     },
     useEffect(fn) {
@@ -109,7 +118,7 @@ function boot(options = {}) {
     clearTimeout: () => {},
     fetch:
       fetchImpl ||
-      (() => Promise.resolve({ ok: true, json: async () => ({ tasks }) })),
+      (() => Promise.resolve({ ok: true, json: async () => ({ tasks, background }) })),
   }
   sandbox.globalThis = sandbox
 
@@ -192,6 +201,15 @@ function findAll(node, className, out = []) {
   return out
 }
 
+/** A frame that has been reset to empty, whichever field the host mangled. */
+const isClearedFrame = (v) =>
+  !!v &&
+  typeof v === 'object' &&
+  Array.isArray(v.tasks) &&
+  v.tasks.length === 0 &&
+  Array.isArray(v.background) &&
+  v.background.length === 0
+
 /* ------------------------------------------------------------------ */
 /* 1. fifty concurrent cards                                           */
 /* ------------------------------------------------------------------ */
@@ -263,7 +281,7 @@ async function settle() {
   const app = boot({ fetchImpl: () => Promise.resolve({ ok: true, json: async () => ({ tasks: 'nope' }) }) })
   app.render('shell.overlay')
   await settle()
-  if (!app.setCalls.some((v) => Array.isArray(v) && v.length === 0))
+  if (!app.setCalls.some((v) => isClearedFrame(v)))
     throw new Error('a non-array tasks field must clear the list, got ' + JSON.stringify(app.setCalls))
   ok('poll: a non-array tasks field is discarded instead of rendered')
 }
@@ -298,7 +316,7 @@ async function settle() {
   // The fifth consecutive failure drops it.
   tick()
   await settle()
-  if (!app.setCalls.some((v) => Array.isArray(v) && v.length === 0))
+  if (!app.setCalls.some((v) => isClearedFrame(v)))
     throw new Error('the fifth consecutive failure must clear the list')
   ok('poll: five consecutive misses drop a stale frame instead of freezing forever')
 }
@@ -326,7 +344,7 @@ async function settle() {
   mode = 'ok'
   tick()
   await settle()
-  const clearedBefore = app.setCalls.some((v) => Array.isArray(v) && v.length === 0)
+  const clearedBefore = app.setCalls.some((v) => isClearedFrame(v))
   if (clearedBefore) throw new Error('a successful poll must not clear the list')
   // Four more failures after the success: the counter restarted, so still no clear.
   mode = 'fail'
@@ -334,7 +352,7 @@ async function settle() {
     tick()
     await settle()
   }
-  if (app.setCalls.some((v) => Array.isArray(v) && v.length === 0))
+  if (app.setCalls.some((v) => isClearedFrame(v)))
     throw new Error('the failure counter must restart after a successful poll')
   ok('poll: a successful poll restarts the failure counter')
 }

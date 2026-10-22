@@ -24,6 +24,9 @@ agent 常在后台默默执行 `curl -L -o xxx.zip`、`pnpm add`、网页抓取�
 | 网页抓取 | 「正在抓取网页中...N s」，秒数实时递增 |
 | 功能搜索 | 「正在搜索「查询摘要」中...请稍后」 |
 | 其他加载 | 「载入中...」不确定态进度条 |
+| 后台任务 | 「后台运行中 · npm run build · 42s」，没有进度条 |
+
+**后台任务**指的是没有进度可画、但在继续跑的工作：bash 后台 job、子代理、workflow。它们画成一行文字而不是卡片——卡片承诺一条会动的轨道，后台任务给不了，画了反而像卡死。当 agent 正阻塞在等它（`job_wait`、`job_output(wait:true)`、等子代理或 workflow 返回）时，同一行改说「等待中」，简易条则显示「等待后台任务」。**前台的 shell 调用不会出现在这里**：它已经在对话里了，再报一次就是重复。
 
 多条任务竖向堆叠，超过设定条数可滚动；卡片支持拖动，出现动画 10 种 + 无动画，在设置里切换。
 
@@ -138,6 +141,7 @@ plugin_manager action=remove_bundle target="@local/dsh-download-progress"
 - **轮询而非推送**：Client 每秒拉一次状态，最多 1 秒延迟。
 - **命令解析是启发式的**：curl/wget 参数组合极多，未覆盖的写法会退化成「不触发」或「载入中」。
 - **会话重名无法区分**：两个会话同名时，分块块头显示同一个标题。
+- **后台任务只知道「在跑」**：没有百分比、也不能取消，宿主只广播生命周期事件。归属会话靠「父会话此刻阻塞在哪个工具」推断，推断不出来时该行的会话名为空。
 
 ---
 
@@ -177,7 +181,7 @@ localStorage['dsh-download-progress:themes'] = JSON.stringify([
 
 ## 开发与测试
 
-改完可跑五个离线脚本（`smoke.mjs` / `smoke-host.mjs` / `stress-client.mjs` / `stress-host.mjs` / `stress-round2.mjs`）自检，不需要浏览器或 DSH 进程。实现细节见 [NOTES-FOR-AI.md](NOTES-FOR-AI.md)。
+改完跑 `npm test` 即可（六套离线脚本：`contract` / `smoke` / `smoke-host` / `stress-host` / `stress-round2` / `stress-client`），不需要浏览器或 DSH 进程。`contract.mjs` 会拦住「视图直接读 wire 字段」和「文档与实现不一致」两类退化——Host 与 UI 之间的字段契约见 [CONTRACT.md](CONTRACT.md)，其余实现细节见 [NOTES-FOR-AI.md](NOTES-FOR-AI.md)。
 
 ---
 

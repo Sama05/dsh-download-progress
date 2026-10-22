@@ -23,6 +23,14 @@ import {
   sweep,
 } from './state.js'
 import { clip, extractUrl, firstLine, lastLine, uniq, unquote } from './utils.js'
+import {
+  backgroundSnapshot,
+  noteJobEvent,
+  noteToolEnd,
+  noteToolStart,
+  resetBackground,
+  setTitleLookup,
+} from './background.js'
 
 const ok = (message) => console.log('  ok ' + message)
 
@@ -255,6 +263,100 @@ try {
 } finally {
   await new Promise((resolve) => server.close(resolve))
   rmSync(headDir, { recursive: true, force: true })
+}
+
+/* ------------------------------------------------------------------ */
+/* background: jobs, foreground filtering, waiting                     */
+/* ------------------------------------------------------------------ */
+
+{
+  setTitleLookup((sessionId) => (sessionId === 's1' ? '会话一' : ''))
+  resetBackground()
+
+  // A foreground command is registered as a job while it runs. It must NOT
+  // become a background row: the transcript already shows the call, and calling
+  // it "the agent is waiting on background work" would be wrong.
+  const fgStart = Date.now()
+  noteToolStart('s1', 'pwsh', {})
+  noteJobEvent({
+    type: 'registered',
+    job: {
+      id: 'pwsh-fg',
+      kind: 'bash',
+      label: 'Get-ChildItem',
+      owner: 's1',
+      status: 'running',
+      startedAt: fgStart,
+    },
+  })
+  let rows = backgroundSnapshot(fgStart + 500)
+  assert.equal(rows.length, 0, 'a foreground shell call must not appear as background work')
+  ok('background: a foreground shell call is filtered out')
+
+  // The call returns; a genuinely detached job (started before the call) stays.
+  const bgStart = fgStart - 60_000
+  noteJobEvent({
+    type: 'registered',
+    job: {
+      id: 'bash-bg',
+      kind: 'bash',
+      label: 'npm run build',
+      owner: 's1',
+      status: 'running',
+      startedAt: bgStart,
+    },
+  })
+  rows = backgroundSnapshot(fgStart + 600)
+  assert.equal(rows.length, 1, 'the detached job must survive the foreground filter')
+  assert.equal(rows[0].id, 'bash-bg')
+  assert.equal(rows[0].sessionTitle, '会话一', 'background rows share the session-title lookup')
+  assert.equal(rows[0].waiting, false, 'a running job the agent is not blocked on is not waiting')
+  ok('background: a job that outlived its tool call is listed, and carries the session name')
+
+  // The agent now blocks on it: the row must say so.
+  noteToolEnd('s1')
+  noteToolStart('s1', 'job_wait', {})
+  rows = backgroundSnapshot(fgStart + 700)
+  assert.equal(rows[0].waiting, true, 'job_wait blocks the agent on the job')
+  ok('background: waiting is claimed only while the agent is blocked on it')
+
+  // A polling readout does not block; a waiting one does.
+  noteToolStart('s1', 'job_output', { wait: false })
+  assert.equal(backgroundSnapshot(fgStart + 800)[0].waiting, false)
+  noteToolStart('s1', 'job_output', { wait: true })
+  assert.equal(backgroundSnapshot(fgStart + 900)[0].waiting, true)
+  ok('background: job_output counts as blocking only with wait:true')
+
+  // Settlement lingers briefly, then drops. The foreground call's own record is
+  // removed by the shell tool when it returns, so drop it here too: without the
+  // active call the filter no longer recognises it as foreground, and reality
+  // is that the tool has already taken it away.
+  noteToolEnd('s1')
+  noteJobEvent({ type: 'removed', job: { id: 'pwsh-fg' } })
+  noteJobEvent({
+    type: 'settled',
+    cause: 'producer',
+    awaited: false,
+    job: {
+      id: 'bash-bg',
+      kind: 'bash',
+      label: 'npm run build',
+      owner: 's1',
+      status: 'completed',
+      startedAt: bgStart,
+      finishedAt: fgStart + 1000,
+    },
+  })
+  assert.equal(backgroundSnapshot(fgStart + 1500).length, 1, 'a settled job lingers to be noticed')
+  assert.equal(backgroundSnapshot(fgStart + 60_000).length, 0, 'and then it drops')
+  ok('background: a settled row lingers, then leaves the payload')
+
+  // Reset is what a disabled plugin calls; it must leave nothing behind.
+  resetBackground()
+  assert.equal(backgroundSnapshot(Date.now()).length, 0, 'reset clears every table')
+  ok('background: reset clears every table')
+
+  setTitleLookup(() => '')
 }
 
 console.log('\nHOST SMOKE OK — utils, detect and state behave as documented')
