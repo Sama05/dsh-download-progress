@@ -54,7 +54,7 @@ agent 常在后台默默执行 `curl -L -o xxx.zip`、`pnpm add`、网页抓取�
 | Node.js | `>= 18` | 插件跑在 DSH 内置的 Electron 里 |
 | Chromium | `>= 111` | 毛玻璃与 `color-mix` 需要，DSH 0.2.x 自带 |
 | 操作系统 | Windows / macOS / Linux | **只在 Windows 实测过**；其余平台理论可用但未验证 |
-| 第三方依赖 | 无 | 不需要 `npm install`，没有构建步骤 |
+| 第三方依赖 | 无 | 不需要 `npm install`；`client.js` 已是构建产物，装包的人不跑构建 |
 
 版本不满足时插件管理器会以 `incompatible-version` 拒绝并指出缺什么，**不会静默坏掉**，也不影响 DSH 本体。上界不封死，最坏只是浮层不出现。
 
@@ -87,7 +87,7 @@ plugin_manager action=install_bundle target="<本仓库的绝对路径>"
 plugin_manager action=remove_bundle target="@local/dsh-download-progress"
 ```
 
-**不需要 `npm install`**，也没有构建步骤，源码即最终产物。
+**不需要 `npm install`**，发布包里带的就是拼好的 `client.js`，安装方不跑构建。
 
 装好后确认：①「设置 → 插件」里能看到「下载进度条」这一页；② 让 agent 执行一次 `curl -o <文件> <某个大文件 URL>`，浮层会出现在窗口上方。
 
@@ -97,7 +97,7 @@ plugin_manager action=remove_bundle target="@local/dsh-download-progress"
 
 ## 支持哪些下载
 
-判据是**能不能从命令行里解析出落盘路径**。
+判据是**能不能拿到落盘路径**——先看命令行，命令行里没有就去看它指定的脚本。
 
 **有真实进度（字节 + 速度 + 百分比）**
 
@@ -107,7 +107,15 @@ plugin_manager action=remove_bundle target="@local/dsh-download-progress"
 | `curl -O` / `--remote-name` | 目标文件由 URL 推断 |
 | `wget -O <文件>` | |
 | `Invoke-WebRequest -OutFile <文件>` | 必须带 `-OutFile` |
-| `git clone <url> <目录>` | 采样目录总体积 |
+| `git clone <url> <目录>` | 采样目录总体积（目标是目录，`stat` 恒为 0，单独走目录树累加） |
+| `powershell -File <脚本>` / `pwsh -File <脚本>` | 读脚本里的 `-OutFile` / `-Destination` / `-o` |
+
+`-File` 那一行值得单独说：命令本身不含任何路径，插件的做法是**打开脚本静态解析**
+（只读一次，约 0.3 ms），把 `$iso = "D:\…\x.iso"` 这类单层字面量赋值、
+`param([string]$Out = '…')` 默认值、`$env:USERPROFILE` 展开、`Join-Path` 都算出来。
+脚本里的 URL 也一并读出来，用来做 `Content-Length` 探测，所以百分比照样有。
+脚本用子进程下载（`& curl.exe -o $Out $Url`）同样能跟——采样的是**文件大小**，
+跟谁把字节写进去无关。
 
 **只有「进行中」（无字节数，宿主不提供中间事件）**
 
@@ -117,7 +125,9 @@ plugin_manager action=remove_bundle target="@local/dsh-download-progress"
 
 - 下载不落盘（`curl ... | tar -x`、输出到 stdout）；
 - 命令里用变量拼路径（`-o $dst`）——插件只能读命令文本，无法求值；
+- 脚本里的路径要跑起来才知道（`Get-Content cfg.json` 取值、`+` 拼接、here-string、`$(...)` 子表达式）——这类一律**不猜**，不出卡片；
 - 服务端不返回 `Content-Length`（降级为不确定进度条 + 已下载体积 + 速度，无百分比）；
+- 上传（`curl -T` / `--upload-file`）：本端不落文件，不可能有进度，直接不出卡片；
 - 纯内存下载、纯 API 调用。
 
 ---
@@ -140,6 +150,7 @@ plugin_manager action=remove_bundle target="@local/dsh-download-progress"
 - **搜索与抓取只有计时器**：响应是一次性返回的，这是宿主能力边界。
 - **轮询而非推送**：Client 每秒拉一次状态，最多 1 秒延迟。
 - **命令解析是启发式的**：curl/wget 参数组合极多，未覆盖的写法会退化成「不触发」或「载入中」。
+- **脚本只读一次、只看字面量**：`-File` 里的路径必须是能静态算出来的（字面量、`param` 默认值、`$env:`、`Join-Path`）；要 `Get-Content` 读配置、字符串拼接、或 `$(...)` 才能定的，插件不猜、不出卡片。脚本改写后需要等下一次工具调用才重新读。
 - **会话重名无法区分**：两个会话同名时，分块块头显示同一个标题。
 - **后台任务只知道「在跑」**：没有百分比、也不能取消，宿主只广播生命周期事件。归属会话靠「父会话此刻阻塞在哪个工具」推断，推断不出来时该行的会话名为空。
 
@@ -181,7 +192,13 @@ localStorage['dsh-download-progress:themes'] = JSON.stringify([
 
 ## 开发与测试
 
-改完跑 `npm test` 即可（六套离线脚本：`contract` / `smoke` / `smoke-host` / `stress-host` / `stress-round2` / `stress-client`），不需要浏览器或 DSH 进程。`contract.mjs` 会拦住「视图直接读 wire 字段」和「文档与实现不一致」两类退化——Host 与 UI 之间的字段契约见 [CONTRACT.md](CONTRACT.md)，其余实现细节见 [NOTES-FOR-AI.md](NOTES-FOR-AI.md)。
+改完跑 `npm test` 即可（八步全离线，不需要浏览器或 DSH 进程）：`scripts/build-client.mjs --check` → `contract.mjs` → `script.test.mjs` → `smoke.mjs` → `smoke-host.mjs` → `stress-host.mjs` → `stress-round2.mjs` → `stress-client.mjs`。`contract.mjs` 会拦住「视图直接读 wire 字段」和「文档与实现不一致」两类退化——Host 与 UI 之间的字段契约见 [CONTRACT.md](CONTRACT.md)，其余实现细节见 [NOTES-FOR-AI.md](NOTES-FOR-AI.md)。
+
+手工实验的脚手架（限速服务器、命令分类矩阵、真机观察器）在 `lab/`，见 [lab/README.md](lab/README.md)；它不随插件发布。
+
+性能基准：`npm run bench`（中位数 + p95，`--json` 出机器可读结果，`--save` 更新 `bench/baseline.json`；`--after` 存到 `bench/after.json` 便于前后对比）。
+
+**改了 UI 之后要重新拼一次**：`client.js` 是 `src/client/**` 的构建产物（宿主只下发一个 bundle，源码里不能写 `import`），改完跑 `npm run build`；`npm test` 的第一步 `build-client --check` 会在产物过期时直接失败并指出第一处差异。
 
 ---
 

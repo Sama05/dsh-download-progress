@@ -1,0 +1,133 @@
+{
+  "at": "2026-10-23T12:47:52.152Z",
+  "results": [
+    {
+      "name": "classify/curl",
+      "median": 0.0088,
+      "p95": 0.0384,
+      "min": 0.0044,
+      "max": 0.3376,
+      "rounds": 30
+    },
+    {
+      "name": "classify/iwr",
+      "median": 0.004,
+      "p95": 0.0067,
+      "min": 0.0035,
+      "max": 0.0113,
+      "rounds": 30
+    },
+    {
+      "name": "classify/clone",
+      "median": 0.003,
+      "p95": 0.0046,
+      "min": 0.0028,
+      "max": 0.3582,
+      "rounds": 30
+    },
+    {
+      "name": "classify/pkg",
+      "median": 0.0025,
+      "p95": 0.0044,
+      "min": 0.0024,
+      "max": 0.0052,
+      "rounds": 30
+    },
+    {
+      "name": "classify/nothing",
+      "median": 0.0073,
+      "p95": 0.009,
+      "min": 0.0071,
+      "max": 0.0142,
+      "rounds": 30
+    },
+    {
+      "name": "classify/search",
+      "median": 0.0006,
+      "p95": 0.0058,
+      "min": 0.0006,
+      "max": 0.0058,
+      "rounds": 30
+    },
+    {
+      "name": "classify/-File",
+      "median": 0.0068,
+      "p95": 0.0175,
+      "min": 0.0066,
+      "max": 0.0875,
+      "rounds": 30
+    },
+    {
+      "name": "script/plan",
+      "median": 0.3559,
+      "p95": 0.455,
+      "min": 0.312,
+      "max": 0.4852,
+      "rounds": 40
+    },
+    {
+      "name": "targets/curl",
+      "median": 0.0074,
+      "p95": 0.0271,
+      "min": 0.0067,
+      "max": 0.181,
+      "rounds": 30
+    },
+    {
+      "name": "targets/8-flags",
+      "median": 0.0114,
+      "p95": 0.0221,
+      "min": 0.0102,
+      "max": 0.0238,
+      "rounds": 30
+    },
+    {
+      "name": "sample/1-card",
+      "median": 0.0583,
+      "p95": 0.1032,
+      "min": 0.0493,
+      "max": 0.1393,
+      "rounds": 40
+    },
+    {
+      "name": "sample/30-cards",
+      "median": 1.433,
+      "p95": 1.598,
+      "min": 1.2555,
+      "max": 1.598,
+      "rounds": 20
+    },
+    {
+      "name": "snapshot/30-cards",
+      "median": 0.0413,
+      "p95": 0.175,
+      "min": 0.0167,
+      "max": 0.175,
+      "rounds": 20
+    },
+    {
+      "name": "client/parse-in-vm",
+      "median": 0.6404,
+      "p95": 2.2044,
+      "min": 0.5303,
+      "max": 2.2044,
+      "rounds": 12
+    },
+    {
+      "name": "client/read-bytes",
+      "median": 0.1558,
+      "p95": 0.2701,
+      "min": 0.1312,
+      "max": 0.2701,
+      "rounds": 20
+    },
+    {
+      "name": "host/import-cost",
+      "median": 1.3186,
+      "p95": 2.1378,
+      "min": 1.1796,
+      "max": 2.1378,
+      "rounds": 6
+    }
+  ]
+}

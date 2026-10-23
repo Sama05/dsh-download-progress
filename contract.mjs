@@ -28,6 +28,37 @@ const INDEX = read('index.js')
 const CONTRACT = read('CONTRACT.md')
 const BACKGROUND = read('background.js')
 
+/**
+ * The module that actually declares `snapshot()`, in preference order.
+ *
+ * `state.js` is a barrel since the state split, so the wire literal lives in
+ * `state/snapshot.js`. Reading the barrel first keeps this working if the shape
+ * is ever moved back, and keeps the failure message pointing at `state.js`.
+ */
+const SNAPSHOT_SOURCES = ['state.js', 'state/snapshot.js']
+const snapshotSource = () => {
+  for (const name of SNAPSHOT_SOURCES) {
+    const source = name === 'state.js' ? STATE : read(name)
+    if (source.includes('export function snapshot()')) return { name, source }
+  }
+  throw new Error('state.js / state/snapshot.js: snapshot() not found')
+}
+
+/**
+ * The module that actually declares `backgroundSnapshot()`, in preference order.
+ *
+ * `background.js` is a barrel since the background split, so the row literal
+ * lives in `background/snapshot.js`. Same fallback shape as `snapshotSource`.
+ */
+const BACKGROUND_SOURCES = ['background.js', 'background/snapshot.js']
+const backgroundSource = () => {
+  for (const name of BACKGROUND_SOURCES) {
+    const source = name === 'background.js' ? BACKGROUND : read(name)
+    if (source.includes('export function backgroundSnapshot(')) return { name, source }
+  }
+  throw new Error('background.js / background/snapshot.js: backgroundSnapshot() not found')
+}
+
 let failures = 0
 const fail = (message) => {
   failures++
@@ -46,13 +77,14 @@ const pass = (message) => console.log('ok    ' + message)
  * point is to read the SHAPE the host promises, not to run it.
  */
 function wireFields() {
-  const start = STATE.indexOf('export function snapshot()')
-  if (start < 0) throw new Error('state.js: snapshot() not found')
-  const body = STATE.slice(start)
+  const { name, source } = snapshotSource()
+  const start = source.indexOf('export function snapshot()')
+  if (start < 0) throw new Error(name + ': snapshot() not found')
+  const body = source.slice(start)
   const open = body.indexOf('return {')
-  if (open < 0) throw new Error('state.js: snapshot() has no object literal')
+  if (open < 0) throw new Error(name + ': snapshot() has no object literal')
   const close = body.indexOf('\n  })', open)
-  if (close < 0) throw new Error('state.js: snapshot() literal is not terminated')
+  if (close < 0) throw new Error(name + ': snapshot() literal is not terminated')
   const literal = body.slice(open, close)
 
   const fields = []
@@ -74,13 +106,14 @@ if (WIRE.length === 0) fail('state.js: snapshot() exposes no fields')
  * promise, and importing the module would run its sampler.
  */
 function backgroundWireFields() {
-  const start = BACKGROUND.indexOf('export function backgroundSnapshot(')
-  if (start < 0) throw new Error('background.js: backgroundSnapshot() not found')
-  const body = BACKGROUND.slice(start)
+  const { name, source } = backgroundSource()
+  const start = source.indexOf('export function backgroundSnapshot(')
+  if (start < 0) throw new Error(name + ': backgroundSnapshot() not found')
+  const body = source.slice(start)
   const open = body.indexOf('rows.push({')
-  if (open < 0) throw new Error('background.js: no rows.push({ ... }) literal')
+  if (open < 0) throw new Error(name + ': no rows.push({ ... }) literal')
   const close = body.indexOf('\n    })', open)
-  if (close < 0) throw new Error('background.js: row literal is not terminated')
+  if (close < 0) throw new Error(name + ': row literal is not terminated')
   const literal = body.slice(open, close)
 
   const fields = []

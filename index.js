@@ -13,6 +13,7 @@
  */
 import { classify } from './detect.js'
 import {
+  BUILD_TAG,
   beginTask,
   noteInstallLog,
   noteInstallPhase,
@@ -31,6 +32,7 @@ import {
   noteWorkflowLog,
   noteWorkflowPhase,
   noteWorkflowStart,
+  reconcileJobs,
   setTitleLookup,
 } from './background.js'
 import { text } from './utils.js'
@@ -128,13 +130,26 @@ export function apply(ctx) {
   ctx.effect(() => {
     const timer = setInterval(() => {
       try {
-        sweep(Date.now())
+        const at = Date.now()
+        // A row replayed from before its job settled never gets the matching
+        // `settled`, and running rows never linger out — re-read the registry
+        // so a ghost cannot outlive the work it describes.
+        reconcileJobs(ctx.get('jobs'), at)
+        // A job that is still running keeps its own session's cards alive past
+        // the tool call that launched it — see sweep().
+        const busy = new Set(
+          backgroundSnapshot(at)
+            .filter((row) => row.status === 'running')
+            .map((row) => String(row.sessionId || '')),
+        )
+        sweep(at, (sessionId) => busy.has(String(sessionId || '')))
       } catch {
         /* never let one bad sample throw into the host loop */
       }
     }, TICK_MS)
     return () => clearInterval(timer)
   })
+
 
   // Around-dispatch observation. This listener owns no decision: it either does
   // not recognise the call and hands it straight back, or it records a task and
@@ -157,7 +172,7 @@ export function apply(ctx) {
       const plan = classify(exec)
       if (plan) task = beginTask(exec, plan, await resolveCwd(ctx, exec))
     } catch {
-      /* observation only: the call must proceed regardless */
+      /* bookkeeping only: a throw here must not fail the observed tool call */
     }
 
     try {
@@ -197,12 +212,28 @@ export function apply(ctx) {
       return undefined
     }
     let dispose = null
+    let verify = null
     try {
       dispose = jobs.events.subscribe({ owners: 'all' }, noteJobEvent)
+      // A replay can hand us rows that settled while nobody was subscribed
+      // (the plugin was reloaded mid-download). Those never receive a later
+      // `settled`, so verify them once instead of waiting out the quiet window.
+      verify = setTimeout(() => {
+        try {
+          reconcileJobs(jobs, Date.now(), true)
+        } catch {
+          /* reconciliation is best-effort */
+        }
+      }, 1000)
     } catch {
       return undefined
     }
     return () => {
+      try {
+        if (verify) clearTimeout(verify)
+      } catch {
+        /* the timer may already have fired */
+      }
       try {
         if (typeof dispose === 'function') dispose()
       } catch {
@@ -231,6 +262,7 @@ export function apply(ctx) {
         try {
           body = JSON.stringify({
             schemaVersion: SCHEMA_VERSION,
+            buildTag: BUILD_TAG,
             tasks: snapshot(),
             background: backgroundSnapshot(),
           })

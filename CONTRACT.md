@@ -3,11 +3,15 @@
 这个插件分两半，中间只有一个窄缝：Host 每 1 秒吐一份 JSON，Client 读它渲染。
 
 ```
-Host                                    Client
-detect.js  命令识别                      taskStore.adopt()   收帧 + 版本兼容
-state.js   任务表 → snapshot()           adapter             唯一读 wire 字段的地方
-index.js   路由 /download-progress/state  views              只吃 view-model
+Host                                        Client
+detect.js  命令识别（barrel → detect/）       taskStore.adopt()   收帧 + 版本兼容
+state.js   任务表 → snapshot()（→ state/）    adapter             唯一读 wire 字段的地方
+index.js   路由 /download-progress/state      views               只吃 view-model
 ```
+
+`detect.js` / `state.js` 是 barrel，只 re-export；`snapshot()` 与 `backgroundSnapshot()`
+的实际字面量在 `state/snapshot.js` 与 `background/snapshot.js`，
+`contract.mjs` 会按这个顺序去找（barrel 里没有就直接读子文件），所以拆分不影响校验。
 
 **加 UI 功能只改 `views`。改底层只改 Host，UI 侧最多改 adapter 里的字段映射。**
 

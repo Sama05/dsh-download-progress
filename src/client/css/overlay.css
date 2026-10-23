@@ -1,0 +1,417 @@
+/* ---- floating overlay ---- */
+.ddp-wrap{
+  --ddp-rows:3;
+  /* Height the session headers add; the overlay overwrites it once it knows how
+     many blocks it will draw. 0 keeps the single-session layout unchanged. */
+  --ddp-heads:0px;
+  position:fixed;z-index:10000;pointer-events:none;
+  width:min(560px,calc(100vw - 48px));
+  display:flex;flex-direction:column;
+  /* Default: horizontally centred, near the top. Dragging replaces these with
+     explicit left/top; the inline style always wins over this rule. */
+  top:76px;left:50%;transform:translateX(-50%);
+  transition:top .18s ease,left .18s ease;
+}
+.ddp-wrap--drag{transition:none}
+/* Peek outline: shows the overlay's real footprint while hovering the handle.
+   outline does not take part in layout, so it cannot shift anything. */
+.ddp-wrap--peek{
+  outline:1px dashed var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff));
+  outline-offset:6px;border-radius:12px;
+}
+/* The only always-visible part: a slim grip that reveals the overlay on hover. */
+.ddp-handle{
+  position:relative;
+  align-self:center;flex:0 0 auto;
+  width:56px;height:6px;margin-bottom:6px;border-radius:999px;
+  background:var(--ddp-grip,var(--dsw-alias-label-secondary,#a8a8b0));
+  opacity:.22;pointer-events:auto;cursor:grab;
+  transition:opacity .16s ease,width .16s ease;
+}
+/* The wrapper is pointer-events:none and the grip sits 6px above the card list,
+   so without this the pointer crosses a dead band on its way down and the peek
+   collapses mid-travel. Extend the grip's hit area across the gap (transparent,
+   no visual change) so the two targets touch. */
+.ddp-handle::after{
+  content:'';position:absolute;
+  left:-28px;right:-28px;top:-4px;bottom:-10px;
+}
+.ddp-handle:hover{opacity:.55;width:72px}
+.ddp-wrap--peek .ddp-handle{opacity:.6}
+.ddp-wrap--drag .ddp-handle{cursor:grabbing;opacity:.6}
+/* Debug mode turns the grip into a labelled bar. A bare 6px, 22%-opacity line is
+   effectively invisible, so switching the samples on would look like a no-op. */
+.ddp-handle.ddp-handle--debug{
+  width:auto;min-width:140px;height:20px;margin-bottom:8px;
+  padding:0 12px;border-radius:10px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;line-height:1;letter-spacing:.2px;white-space:nowrap;
+  color:var(--ddp-fg,var(--dsw-alias-label-primary,#e8e8ec));
+  background:var(--ddp-chip-bg,var(--dsw-alias-bg-layer-3,rgba(255,255,255,.14)));
+  border:1px solid var(--ddp-chip-border,var(--dsw-alias-border-l1,rgba(255,255,255,.16)));
+  opacity:.72;
+}
+.ddp-handle.ddp-handle--debug:hover{opacity:1;width:auto}
+.ddp-list{
+  pointer-events:auto;display:flex;flex-direction:column;gap:8px;
+  /* Cards carry a log line, so one row is ~62px plus the 8px gap: budget exactly
+     the requested rows instead of clipping the last card's tail. The vh term is
+     a ceiling for short windows — without it a 6-row budget overflows the viewport
+     once the overlay is dragged near an edge. */
+  max-height:min(
+    calc(var(--ddp-rows) * 62px + (var(--ddp-rows) - 1) * 8px + 6px + var(--ddp-heads, 0px) + var(--ddp-bg, 0px)),
+    calc(100vh - 48px)
+  );
+  overflow-y:auto;overflow-x:hidden;
+  /* A little air on all sides: the cards are separated by their own border now,
+     so they must not sit flush against the scroll viewport edge. */
+  padding:4px;
+  /* No scrollbar, by design. A classic scrollbar takes layout width, so crossing
+     the row cap would narrow every card by 6px and re-wrap the log line mid-poll
+     — a quiet jitter that looks like a rendering bug. The list still scrolls by
+     wheel / trackpad; only the track is hidden. */
+  scrollbar-width:none;-ms-overflow-style:none;
+  cursor:grab;
+}
+.ddp-list:active{cursor:grabbing}
+/* Background work: a plain line, not a card. A card promises a track and a
+   fill; a background job has neither, and drawing an empty track would read as
+   a stalled transfer. The waiting modifier is the only emphasis, because that
+   is the row that explains why the agent has gone quiet. */
+.ddp-bgblock{display:flex;flex-direction:column;gap:4px;flex:0 0 auto}
+.ddp-bghead{
+  padding:0 4px;font-size:10px;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--ddp-fg-dim,var(--dsw-alias-label-secondary,#a8a8b0));
+}
+.ddp-bgrow{
+  display:flex;align-items:center;gap:6px;min-width:0;
+  padding:5px 8px;border-radius:9px;
+  font-size:12px;line-height:1.35;
+  color:var(--ddp-fg-dim,var(--dsw-alias-label-secondary,#a8a8b0));
+  background:var(--ddp-group-bg,rgba(255,255,255,.045));
+  border:1px solid transparent;
+}
+.ddp-bgrow--waiting{
+  color:var(--ddp-fg,var(--dsw-alias-label-primary,#e8e8ea));
+  border-color:var(--ddp-group-border,rgba(255,255,255,.14));
+}
+.ddp-bgdot{
+  flex:0 0 auto;width:6px;height:6px;border-radius:50%;
+  background:currentColor;opacity:.5;
+}
+.ddp-bgrow--waiting .ddp-bgdot{
+  opacity:1;animation:ddp-bgpulse 1.2s ease-in-out infinite;
+}
+@keyframes ddp-bgpulse{0%,100%{opacity:.35}50%{opacity:1}}
+.ddp-bgname{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.ddp-bgdetail{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.8}
+.ddp-bgstate{flex:0 0 auto;font-variant-numeric:tabular-nums}
+.ddp-bgmeta{flex:0 0 auto;opacity:.7;font-variant-numeric:tabular-nums}
+/* While dragging, text selection and hover tips would fight the gesture. */
+.ddp-wrap--drag .ddp-list{cursor:grabbing;user-select:none}
+.ddp-wrap--drag .ddp-tip{opacity:0 !important}
+.ddp-list::-webkit-scrollbar{width:0;height:0}
+/* Enter / exit. Applied per card, not to the list: the point is that each bar
+   lights up / powers down on its own, so the stack never scales as one block and
+   a newly added download animates by itself without replaying the others.
+   backwards fill-mode keeps the 0% frame during the stagger delay, otherwise a
+   delayed card would flash in at full opacity before its animation starts. */
+.ddp-anim--in.ddp-ease-float{animation:ddp-float-in .26s cubic-bezier(.2,.8,.2,1) backwards}
+.ddp-anim--out.ddp-ease-float{animation:ddp-float-out .22s ease-in forwards}
+.ddp-anim--in.ddp-ease-crt{animation:ddp-crt-in .34s cubic-bezier(.22,.9,.24,1) backwards}
+.ddp-anim--out.ddp-ease-crt{animation:ddp-crt-out .3s ease-in forwards}
+.ddp-anim--in.ddp-ease-none,.ddp-anim--out.ddp-ease-none{animation:none}
+/* Ripple: the card eases up out of a slightly smaller state while a soft round
+   wave spreads from its centre and fades. The wave lives on ::after and is
+   clipped by the card's rounded edge, so it reads as light welling up from
+   inside the glass rather than a halo floating around it. */
+.ddp-anim--in.ddp-ease-ripple{animation:ddp-ripple-in .5s cubic-bezier(.16,1,.3,1) backwards}
+.ddp-anim--in.ddp-ease-ripple::after{animation:ddp-ripple-wave .78s cubic-bezier(.22,.8,.3,1) backwards}
+.ddp-anim--out.ddp-ease-ripple{animation:ddp-ripple-out .26s ease-in forwards}
+@keyframes ddp-ripple-in{
+  0%{opacity:0;transform:scale(.94)}
+  60%{opacity:1;transform:scale(1.008)}
+  100%{opacity:1;transform:scale(1)}
+}
+@keyframes ddp-ripple-wave{
+  0%{opacity:0;transform:translate(-50%,-50%) scale(.12)}
+  22%{opacity:.8;transform:translate(-50%,-50%) scale(.55)}
+  100%{opacity:0;transform:translate(-50%,-50%) scale(2.2)}
+}
+@keyframes ddp-ripple-out{
+  0%{opacity:1;transform:scale(1)}
+  100%{opacity:0;transform:scale(.96)}
+}
+@keyframes ddp-float-in{
+  from{opacity:0;transform:translateY(10px) scale(.985)}
+  to{opacity:1;transform:translateY(0) scale(1)}
+}
+@keyframes ddp-float-out{
+  from{opacity:1;transform:translateY(0) scale(1)}
+  to{opacity:0;transform:translateY(8px) scale(.985)}
+}
+/* CRT power-on: a collapsed, over-bright scanline snaps open vertically, then
+   overshoots slightly and settles. transform-origin stays at the centre so it
+   reads as a tube lighting up rather than a panel sliding down. */
+@keyframes ddp-crt-in{
+  0%{opacity:0;transform:scale(.72,.004);filter:brightness(2.6) saturate(.6)}
+  38%{opacity:1;transform:scale(1,.02);filter:brightness(2.2)}
+  64%{transform:scale(.97,1.06);filter:brightness(1.25)}
+  100%{opacity:1;transform:scale(1,1);filter:brightness(1)}
+}
+/* CRT power-off: reverse, with the final state being a thin bright line that
+   fades — the list unmounts right after, so the last frame is never held. */
+@keyframes ddp-crt-out{
+  0%{opacity:1;transform:scale(1,1);filter:brightness(1)}
+  45%{transform:scale(1.01,.55);filter:brightness(1.5)}
+  100%{opacity:0;transform:scale(.7,.004);filter:brightness(2.8)}
+}
+
+/* ---- six more feels, same one-class-per-card shape ------------------------
+   They stick to transform / clip-path on purpose. A filter on the card makes
+   it a new backdrop root, so the glass loses its blur for as long as the
+   animation runs (the CRT feel has always paid that price). Blur is the one
+   that spends it deliberately; everything else here keeps the pane intact. */
+
+/* Slide: enters from the left edge, leaves to the right — the only feel with a
+   directional bias, which is why its exit does not mirror its entry. */
+.ddp-anim--in.ddp-ease-slide{animation:ddp-slide-in .3s cubic-bezier(.2,.85,.25,1) backwards}
+.ddp-anim--out.ddp-ease-slide{animation:ddp-slide-out .22s ease-in forwards}
+@keyframes ddp-slide-in{
+  from{opacity:0;transform:translateX(-16px)}
+  to{opacity:1;transform:translateX(0)}
+}
+@keyframes ddp-slide-out{
+  from{opacity:1;transform:translateX(0)}
+  to{opacity:0;transform:translateX(14px)}
+}
+
+/* Drop: falls in from above. The bounce lives in the timing function rather than
+   the keyframes, so the card never overshoots its own top edge mid-flight. */
+.ddp-anim--in.ddp-ease-drop{animation:ddp-drop-in .34s cubic-bezier(.34,1.42,.5,1) backwards}
+.ddp-anim--out.ddp-ease-drop{animation:ddp-drop-out .2s ease-in forwards}
+@keyframes ddp-drop-in{
+  from{opacity:0;transform:translateY(-14px) scale(.99)}
+  to{opacity:1;transform:translateY(0) scale(1)}
+}
+@keyframes ddp-drop-out{
+  from{opacity:1;transform:translateY(0)}
+  to{opacity:0;transform:translateY(-10px)}
+}
+
+/* Pop: springs up from a shrunken state with a visible overshoot. */
+.ddp-anim--in.ddp-ease-pop{animation:ddp-pop-in .32s cubic-bezier(.2,1.5,.4,1) backwards}
+.ddp-anim--out.ddp-ease-pop{animation:ddp-pop-out .2s ease-in forwards}
+@keyframes ddp-pop-in{
+  from{opacity:0;transform:scale(.86)}
+  to{opacity:1;transform:scale(1)}
+}
+@keyframes ddp-pop-out{
+  from{opacity:1;transform:scale(1)}
+  to{opacity:0;transform:scale(.9)}
+}
+
+/* Wipe: a hard edge sweeps across and leaves the card in place — no fade, so the
+   first frame already reads as "this is arriving". The rounded corner still
+   clips it because the card itself is overflow:hidden. */
+.ddp-anim--in.ddp-ease-wipe{animation:ddp-wipe-in .34s cubic-bezier(.3,.9,.3,1) backwards}
+.ddp-anim--out.ddp-ease-wipe{animation:ddp-wipe-out .24s ease-in forwards}
+@keyframes ddp-wipe-in{
+  from{clip-path:inset(0 100% 0 0)}
+  to{clip-path:inset(0 0 0 0)}
+}
+@keyframes ddp-wipe-out{
+  from{clip-path:inset(0 0 0 0)}
+  to{clip-path:inset(0 0 0 100%)}
+}
+
+/* Flip: swings down from a tilted plane. perspective() sits inside the
+   transform so the origin stays at the card's own centre with no wrapper. */
+.ddp-anim--in.ddp-ease-flip{animation:ddp-flip-in .4s cubic-bezier(.25,.9,.3,1) backwards}
+.ddp-anim--out.ddp-ease-flip{animation:ddp-flip-out .26s ease-in forwards}
+@keyframes ddp-flip-in{
+  from{opacity:0;transform:perspective(620px) rotateX(-74deg)}
+  60%{opacity:1;transform:perspective(620px) rotateX(6deg)}
+  to{opacity:1;transform:perspective(620px) rotateX(0)}
+}
+@keyframes ddp-flip-out{
+  from{opacity:1;transform:perspective(620px) rotateX(0)}
+  to{opacity:0;transform:perspective(620px) rotateX(58deg)}
+}
+
+/* Spin: a short helical entry — the card rotates and scales at once, so it reads
+   as screwing into place rather than as a plain zoom. */
+.ddp-anim--in.ddp-ease-spin{animation:ddp-spin-in .36s cubic-bezier(.22,1.2,.34,1) backwards}
+.ddp-anim--out.ddp-ease-spin{animation:ddp-spin-out .22s ease-in forwards}
+@keyframes ddp-spin-in{
+  from{opacity:0;transform:rotate(-8deg) scale(.9)}
+  to{opacity:1;transform:rotate(0) scale(1)}
+}
+@keyframes ddp-spin-out{
+  from{opacity:1;transform:rotate(0) scale(1)}
+  to{opacity:0;transform:rotate(5deg) scale(.94)}
+}
+
+/* Blur: resolves out of a frosted haze. This is the feel that knowingly spends
+   the backdrop root — a wide blur radius animating is exactly what reads as
+   focus pulling, and the glass coming back into focus at the end is the point. */
+.ddp-anim--in.ddp-ease-blur{animation:ddp-blur-in .38s ease-out backwards}
+.ddp-anim--out.ddp-ease-blur{animation:ddp-blur-out .24s ease-in forwards}
+@keyframes ddp-blur-in{
+  from{opacity:0;filter:blur(9px);transform:scale(1.02)}
+  to{opacity:1;filter:blur(0);transform:scale(1)}
+}
+@keyframes ddp-blur-out{
+  from{opacity:1;filter:blur(0)}
+  to{opacity:0;filter:blur(7px)}
+}
+/* Frosted glass, iOS/macOS style: the blur is what makes the card read as a
+   pane of glass, so the card itself is only a light translucent tint over
+   whatever sits behind it. There is deliberately no specular corner bloom —
+   real glass shows a hairline of light along its top edge, nothing more. */
+.ddp-card{
+  /* The list is a flex column with a max-height, so cards MUST opt out of
+     shrinking. Without this they compress into hairlines instead of the list
+     scrolling: overflow:hidden on the card zeroes its automatic minimum size,
+     which is exactly what lets flex squash it past its content. */
+  flex:0 0 auto;
+  position:relative;isolation:isolate;overflow:hidden;
+  background:var(--ddp-card-bg,var(--dsw-alias-bg-overlay,rgba(32,32,36,.9)));
+  /* With no theme override, tint the host colour down so the blur has something
+     to show. Themes hand over an already-translucent value, so they win as-is. */
+  background:var(--ddp-card-bg,color-mix(in srgb,var(--dsw-alias-bg-overlay,rgba(32,32,36,.9)) 62%,transparent));
+  border:1px solid var(--ddp-card-border,var(--dsw-alias-border-l1,rgba(255,255,255,.10)));
+  border-radius:12px;padding:8px 10px;
+  /* No outer drop shadow, by design: the list is a scroll container whose
+     overflow clips descendants, so a cast shadow would be sliced into a hard
+     rectangle at its padding-box — a faint panel behind the stack. Glass
+     separates by blur and border, never by a shadow it cannot show. */
+  box-shadow:
+    inset 0 -1px 0 var(--ddp-card-border,rgba(255,255,255,.10)),
+    inset 0 1px 0 var(--ddp-inner-hi,rgba(255,255,255,.12));
+  font-size:12px;line-height:1.45;
+  color:var(--ddp-fg,var(--dsw-alias-label-primary,#e8e8ea));
+  /* One variable so a theme can retune the whole material (radius, saturation,
+     brightness lift) without touching this rule. */
+  -webkit-backdrop-filter:var(--ddp-glass,blur(26px) saturate(185%));
+  backdrop-filter:var(--ddp-glass,blur(26px) saturate(185%));
+  transition:box-shadow .18s ease,transform .18s ease;
+}
+/* While the window edge is being dragged the cards would re-blur a large
+   backdrop every frame, which is the expensive half of a live resize. The blur
+   returns on its own a moment after the gesture stops; nothing else changes. */
+.ddp-wrap--resizing .ddp-card{
+  -webkit-backdrop-filter:none;
+  backdrop-filter:none;
+}
+/* A whisper of a vertical sheen: glass catches a little more light at its top
+   edge. Linear only — no radial hotspot. */
+.ddp-card::before{
+  content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:0;
+  background:linear-gradient(180deg,var(--ddp-sheen,rgba(255,255,255,.06)) 0%,transparent 46%);
+}
+/* Ripple layer. Idle by default; only the ripple feel animates it. Clipped by
+   the card's rounded edge because the card itself is overflow:hidden. */
+.ddp-card::after{
+  content:'';position:absolute;left:50%;top:50%;width:200%;aspect-ratio:1;
+  transform:translate(-50%,-50%) scale(.12);
+  border-radius:50%;pointer-events:none;opacity:0;z-index:0;
+  background:radial-gradient(circle,var(--ddp-ripple,rgba(120,170,255,.26)) 0%,transparent 62%);
+}
+.ddp-card > *{position:relative;z-index:1}
+/* Hover only lifts. It must not change the shading: the shadow is inset now, so
+   re-stating it here would be a no-op that implies an outer glow exists. */
+.ddp-card:hover{transform:translateY(-1px)}
+/* While dragging the whole stack, a per-card hover lift would fight the gesture. */
+.ddp-wrap--drag .ddp-card:hover{transform:none}
+.ddp-row{display:flex;align-items:baseline;gap:10px}
+.ddp-name{
+  flex:1 1 auto;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.ddp-meta{
+  flex:0 0 auto;white-space:nowrap;
+  color:var(--ddp-fg-dim,var(--dsw-alias-label-secondary,#a8a8b0));
+  font-variant-numeric:tabular-nums;
+}
+.ddp-track{position:relative;margin-top:6px;height:5px}
+.ddp-clip{
+  height:100%;border-radius:999px;overflow:hidden;
+  background:var(--ddp-track-bg,var(--dsw-alias-bg-layer-2,rgba(255,255,255,.13)));
+}
+.ddp-fill{
+  position:relative;height:100%;border-radius:999px;overflow:hidden;
+  /* Solid token first (older engines), then the same token at 62% alpha so the
+     trough reads through the bar instead of covering it with a flat block. */
+  background:var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff));
+  background:color-mix(in srgb, var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff)) 62%, transparent);
+  transition:width .45s linear;
+}
+.ddp-fill::after{
+  content:"";position:absolute;top:0;left:-40%;width:40%;height:100%;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.38),transparent);
+  animation:ddp-shine 1.5s linear infinite;
+}
+.ddp-fill--indet{width:38%;animation:ddp-slide 1.15s ease-in-out infinite}
+@keyframes ddp-slide{0%{margin-left:-38%}100%{margin-left:100%}}
+@keyframes ddp-shine{0%{left:-40%}100%{left:100%}}
+.ddp-tip{
+  position:absolute;right:0;bottom:calc(100% + 6px);
+  padding:1px 6px;border-radius:5px;font-size:11px;
+  background:var(--ddp-pop-bg,var(--dsw-alias-bg-layer-3,#2a2a30));
+  color:var(--ddp-fg,var(--dsw-alias-label-primary,#fff));
+  border:1px solid var(--ddp-pop-border,var(--dsw-alias-border-l1,rgba(255,255,255,.14)));
+  opacity:0;transition:opacity .12s;pointer-events:none;white-space:nowrap;
+}
+.ddp-track:hover .ddp-tip{opacity:1}
+.ddp-log{
+  margin-top:4px;font-size:11px;
+  color:var(--ddp-fg-dim,var(--dsw-alias-label-secondary,#a8a8b0));
+  /* .55 looked right over an opaque plate; once the card became real glass the
+     line sat on whatever was behind it and stopped being readable. */
+  opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+
+/* Sessions. With downloads from more than one session the list groups them:
+   each group is a glass block carrying the session name, and the task cards
+   live inside it. With a single session nothing is wrapped, so the plain
+   one-session overlay keeps exactly the look it had before grouping existed. */
+.ddp-group{
+  flex:0 0 auto;display:flex;flex-direction:column;gap:8px;
+  padding:6px 6px 8px;border-radius:14px;
+  /* A group is a plate, not a wash. At the old 4.5% tint the chat text behind
+     the overlay showed straight through the header row, so a session name that
+     already carried the primary foreground still read as doubled and faint —
+     the colour was fine, the backdrop was not. Same recipe as a card: the host
+     overlay colour cut with transparency, plus blur underneath, so the name has
+     something quiet to sit on. */
+  background:var(--ddp-group-bg,color-mix(in srgb,var(--dsw-alias-bg-overlay,rgba(32,32,36,.9)) 55%,transparent));
+  border:1px solid var(--ddp-group-border,rgba(255,255,255,.09));
+  -webkit-backdrop-filter:var(--ddp-group-glass,blur(16px) saturate(170%));
+  backdrop-filter:var(--ddp-group-glass,blur(16px) saturate(170%));
+}
+.ddp-group-head{
+  display:flex;align-items:baseline;gap:8px;
+  padding:0 2px;font-size:11.5px;line-height:1.4;
+  /* The session name is the whole point of a block, so it carries the PRIMARY
+     foreground, not the dim one. On the glass material the dim token sat at
+     roughly half contrast and the header was reported as too faint to read.
+     --ddp-group-fg sits in front so a theme can tune the header on its own
+     without touching any other text. */
+  color:var(--ddp-group-fg,var(--ddp-fg,var(--dsw-alias-label-primary,#e8e8ea)));
+  /* A 1px dark halo under the name. Blur alone cannot fully separate 11px text
+     from whatever chat line happens to sit behind the overlay; the halo buys the
+     contrast back without brightening the plate. Themes set --ddp-group-shadow
+     to 'none' where a halo would smear (the light plate). */
+  text-shadow:var(--ddp-group-shadow,0 1px 2px rgba(0,0,0,.5));
+}
+.ddp-group-name{
+  flex:1 1 auto;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-weight:600;
+}
+/* A session with several calls in flight: the count is the only cue that the
+   block holds more than the one card the header sits above. */
+.ddp-group-count{flex:0 0 auto;opacity:.75;font-variant-numeric:tabular-nums}
+.ddp-group-cards{display:flex;flex-direction:column;gap:8px}
+

@@ -1,0 +1,194 @@
+/* ---- inline bar (composer tool row) ----
+   A second, deliberately plainer presenter: one bar plus the live rate, no name,
+   no size, no log line. It lives in the composer's tool row next to the
+   permission chip instead of floating over the page, and it only ever shows the
+   session whose composer it is sitting in.
+
+   Every value here is a --ddp-* custom property with the host token behind it,
+   exactly like the overlay, so a theme reaches this bar through the same
+   registry; nothing about it is hard-coded to one look.
+
+   The row belongs to whoever else registered into it, so the bar opts out of
+   growing (flex:0 0 auto) and stays inside a max-width: when the row is crowded
+   the bar shrinks and its label ellipsises, it never pushes a neighbour off. */
+.ddp-mx{
+  /* Anchor for the hover percentage, which is painted above the bar. */
+  position:relative;display:inline-flex;align-items:center;
+  /* No gap on the row: the collapsed bodies (dots, rate) are always in the
+     tree at zero width, and a flex gap is charged for them anyway. A ring with
+     the rate hidden therefore sat 8px from the left edge and 20px from the
+     right, because two 6px gaps stacked up behind zero-width siblings. Spacing
+     is a margin-left on the body that is actually wide, so a hidden body costs
+     nothing. (Plain text only — a backtick here would close the CSS template
+     literal the bundle is built from.) */
+  gap:0;
+  flex:0 0 auto;min-width:0;max-width:min(240px,40vw);
+  height:22px;padding:0 8px;
+  border-radius:999px;
+  font-size:11px;line-height:1;
+  font-variant-numeric:tabular-nums;
+  color:var(--ddp-fg,var(--dsw-alias-label-primary,#e8e8ea));
+  background:var(--ddp-mx-bg,rgba(255,255,255,.07));
+  /* No border. A stroke around the capsule made the shape change read as a box
+     being resized instead of one mark unfolding into another. */
+  border:0;
+  /* Same glass recipe as a card, weaker: the tool row is already a material and
+     a second opaque plate on top of it would read as a button, not a readout. */
+  -webkit-backdrop-filter:var(--ddp-mx-glass,blur(10px) saturate(160%));
+  backdrop-filter:var(--ddp-mx-glass,blur(10px) saturate(160%));
+  /* Hover brightens the plate only. It must not move the box: the old 1px lift
+     walked the pointer off the chip's bottom edge, which dropped :hover, moved
+     it back, and made the readout flicker every frame. */
+  transition:background .18s ease,box-shadow .22s ease;
+}
+.ddp-mx:hover{
+  background:var(--ddp-mx-bg-hover,rgba(255,255,255,.13));
+  box-shadow:0 3px 12px -4px rgba(0,0,0,.42);
+}
+/* ---------------------------------------------------------------------------
+   Three bodies, one capsule.
+
+   Which body is painted follows the data, not a setting:
+     bar   a fraction is known (a download with a total)  -> track + shimmer
+     ring  work is in flight but no fraction              -> spinning arc
+     dots  nothing measurable at all                      -> three breaths
+
+   All three bodies are always in the tree and are collapsed with width /
+   max-width rather than unmounted. That is what makes bar <-> ring glide:
+   auto widths cannot transition, fixed ones can, so the track shrinks to zero
+   while the ring grows out of it in the same 300ms. Unmounting either side
+   would snap the capsule's width and look like a jump cut.
+   --------------------------------------------------------------------------- */
+/* ---- one path, two shapes ------------------------------------------------
+   The bar and the ring are the SAME two stroked paths; only their d differs.
+   Chromium interpolates d between two paths that share a command list, so the
+   ring genuinely unrolls into the bar instead of one element fading out while
+   another fades in. Both states are M plus four C segments, which is what
+   makes the interpolation legal: two straight runs and two degenerate curves
+   in the bar state match the four quarter-arcs of the ring point for point.
+
+   The wrapper clips from 13px to 64px wide, so the ring (drawn in the left
+   13px of a 64px viewBox) opens to the right as the path straightens, and the
+   cut at the top of the ring becomes the leading edge of the bar.
+   ------------------------------------------------------------------------- */
+.ddp-mx-shape{
+  position:relative;flex:0 0 auto;
+  width:13px;height:13px;overflow:hidden;border-radius:999px;
+  transform-origin:center;
+  /* The shape scales in from the dots' centre, so leaving or entering the
+     idle state reads as the dots condensing into a ring rather than as two
+     widgets swapping places. */
+  transition:width .9s cubic-bezier(.32,.72,0,1),
+             opacity .4s ease,
+             transform .75s cubic-bezier(.32,.72,0,1);
+}
+.ddp-mx--bar .ddp-mx-shape{width:64px}
+.ddp-mx--dots .ddp-mx-shape{width:0;opacity:0;transform:scale(.25)}
+.ddp-mx-shape > svg{display:block;width:64px;height:13px}
+/* The same breath the dots have, carried by the live bodies: a running task
+   should read as alive, not as a frozen gauge. Kept to opacity on purpose —
+   scaling the paths would push the bar past the 13px clip and shear its ends. */
+.ddp-mx--ring .ddp-mx-shape > svg,
+.ddp-mx--bar .ddp-mx-shape > svg{animation:ddp-mx-glow 1.2s ease-in-out infinite}
+@keyframes ddp-mx-glow{
+  0%,100%{opacity:.68}
+  45%{opacity:1}
+}
+.ddp-mx-arc,.ddp-mx-prog{
+  fill:none;stroke-linecap:round;
+  /* Clockwise from the top; 5.25 is the ring's centre-line radius. */
+  d:path("M 6.5 1.25 C 9.4 1.25 11.75 3.6 11.75 6.5 C 11.75 9.4 9.4 11.75 6.5 11.75 C 3.6 11.75 1.25 9.4 1.25 6.5 C 1.25 3.6 3.6 1.25 6.5 1.25");
+  transition:d .9s cubic-bezier(.32,.72,0,1),
+             stroke-width .9s cubic-bezier(.32,.72,0,1),
+             stroke-dasharray .9s cubic-bezier(.32,.72,0,1),
+             opacity .4s ease;
+}
+.ddp-mx--bar .ddp-mx-arc,.ddp-mx--bar .ddp-mx-prog{
+  d:path("M 2.5 6.5 C 22 6.5 42 6.5 61.5 6.5 C 61.5 6.5 61.5 6.5 61.5 6.5 C 61.5 6.5 61.5 6.5 61.5 6.5 C 61.5 6.5 61.5 6.5 61.5 6.5");
+}
+.ddp-mx-arc{
+  stroke:var(--ddp-track-bg,var(--dsw-alias-bg-layer-2,rgba(255,255,255,.16)));
+  stroke-width:2.5;
+  /* A 40-degree bite out of the ring, at the top: that is the cut that opens. */
+  stroke-dasharray:29.3 3.7;
+}
+.ddp-mx--bar .ddp-mx-arc{stroke-width:5;stroke-dasharray:200 0}
+.ddp-mx-prog{
+  stroke:var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff));
+  stroke-width:2.5;
+  transform-origin:6.5px 6.5px;
+  animation:ddp-mx-spin .85s linear infinite;
+}
+.ddp-mx--bar .ddp-mx-prog{stroke-width:5;animation:none}
+.ddp-mx:hover .ddp-mx-prog{animation-duration:.55s}
+@keyframes ddp-mx-spin{to{transform:rotate(360deg)}}
+/* The shimmer still lives on the wrapper, so the light only travels over the
+   filled part and never over the empty groove. */
+.ddp-mx-shape::after{
+  content:'';position:absolute;inset:0;pointer-events:none;opacity:0;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.5),transparent);
+  transform:translateX(-100%);
+}
+.ddp-mx--bar .ddp-mx-shape::after{opacity:1;animation:ddp-mx-shine 1.9s ease-in-out infinite}
+@keyframes ddp-mx-shine{
+  0%{transform:translateX(-100%)}
+  60%,100%{transform:translateX(100%)}
+}
+.ddp-mx:hover .ddp-mx-shape::after{animation-duration:1.1s}
+
+.ddp-mx-dots{
+  flex:0 0 auto;display:inline-flex;align-items:center;gap:3px;
+  width:0;overflow:hidden;opacity:0;margin-left:0;
+  transform-origin:center;
+  transition:width .4s cubic-bezier(.4,0,.2,1),
+             opacity .4s ease,
+             margin-left .4s cubic-bezier(.4,0,.2,1),
+             transform .75s cubic-bezier(.32,.72,0,1);
+}
+.ddp-mx--dots .ddp-mx-dots{width:18px;opacity:1;margin-left:6px;transform:scale(1)}
+.ddp-mx--ring .ddp-mx-dots,
+.ddp-mx--bar .ddp-mx-dots{transform:scale(.35)}
+.ddp-mx-dots > span{
+  flex:0 0 auto;width:4px;height:4px;border-radius:999px;
+  background:var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff));
+  animation:ddp-mx-breathe 1.2s ease-in-out infinite;
+}
+.ddp-mx-dots > span:nth-child(2){animation-delay:.16s}
+.ddp-mx-dots > span:nth-child(3){animation-delay:.32s}
+@keyframes ddp-mx-breathe{
+  0%,100%{opacity:.28;transform:translateY(0) scale(.72)}
+  45%{opacity:1;transform:translateY(-1.5px) scale(1.12)}
+}
+
+.ddp-mx-rate{
+  flex:0 0 auto;white-space:nowrap;overflow:hidden;
+  max-width:0;opacity:0;margin-left:0;
+  transition:max-width .3s cubic-bezier(.4,0,.2,1),opacity .2s ease,margin-left .3s cubic-bezier(.4,0,.2,1);
+}
+.ddp-mx--bar .ddp-mx-rate{max-width:80px;opacity:.85;min-width:52px;margin-left:6px;text-align:right}
+.ddp-mx-extra{
+  flex:0 0 auto;opacity:.6;margin-left:6px;
+  transition:margin-left .3s;
+}
+/* Nothing visible after the shape in ring/dots states, so the capsule's right
+   padding must not still reserve room for the collapsed bodies. The ring is a
+   symmetric 13px dot in a 22px capsule: 8px on both sides, with the zero-width
+   siblings contributing no margin of their own. */
+.ddp-mx--ring,
+.ddp-mx--dots{padding-right:8px}
+/* Hover-to-read detail. Painted above the chip and pointer-transparent, so it
+   never blocks the control next to it. The wording differs per body: a
+   fraction for the bar, the kind + elapsed for the ring, nothing for the dots. */
+.ddp-mx-tip{
+  position:absolute;left:50%;bottom:calc(100% + 6px);
+  transform:translateX(-50%) translateY(3px);
+  padding:2px 7px;border-radius:6px;font-size:11px;white-space:nowrap;
+  background:var(--ddp-pop-bg,var(--dsw-alias-bg-layer-3,#2a2a30));
+  color:var(--ddp-fg,var(--dsw-alias-label-primary,#fff));
+  border:1px solid var(--ddp-pop-border,var(--dsw-alias-border-l1,rgba(255,255,255,.14)));
+  box-shadow:0 4px 14px -4px rgba(0,0,0,.45);
+  opacity:0;transition:opacity .14s ease,transform .18s cubic-bezier(.2,1.3,.4,1);
+  pointer-events:none;z-index:1;
+}
+.ddp-mx:hover .ddp-mx-tip{opacity:1;transform:translateX(-50%) translateY(0)}
+

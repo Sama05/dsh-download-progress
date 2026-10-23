@@ -7,3 +7,12 @@ Thumbs.db
 
 # scratch space for manual experiments (probe scripts, downloaded fixtures)
 dev/
+
+# lab experiment outputs (downloads stay out of git, the fixture scripts stay in).
+# `lab/work/` itself must not be excluded — git cannot re-include a file whose
+# parent directory is excluded, so the ignore is on the directory's contents.
+lab/tmp/
+lab/work/*
+!lab/work/*.ps1
+!lab/work/*.mjs
+

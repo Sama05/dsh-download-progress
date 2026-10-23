@@ -476,8 +476,15 @@ window.__ModuleLoader__.load({
    the bar shrinks and its label ellipsises, it never pushes a neighbour off. */
 .ddp-mx{
   /* Anchor for the hover percentage, which is painted above the bar. */
-  position:relative;
-  display:inline-flex;align-items:center;gap:6px;
+  position:relative;display:inline-flex;align-items:center;
+  /* No gap on the row: the collapsed bodies (dots, rate) are always in the
+     tree at zero width, and a flex gap is charged for them anyway. A ring with
+     the rate hidden therefore sat 8px from the left edge and 20px from the
+     right, because two 6px gaps stacked up behind zero-width siblings. Spacing
+     is a margin-left on the body that is actually wide, so a hidden body costs
+     nothing. (Plain text only — a backtick here would close the CSS template
+     literal the bundle is built from.) */
+  gap:0;
   flex:0 0 auto;min-width:0;max-width:min(240px,40vw);
   height:22px;padding:0 8px;
   border-radius:999px;
@@ -594,13 +601,14 @@ window.__ModuleLoader__.load({
 
 .ddp-mx-dots{
   flex:0 0 auto;display:inline-flex;align-items:center;gap:3px;
-  width:0;overflow:hidden;opacity:0;margin-right:0;
+  width:0;overflow:hidden;opacity:0;margin-left:0;
   transform-origin:center;
   transition:width .4s cubic-bezier(.4,0,.2,1),
              opacity .4s ease,
+             margin-left .4s cubic-bezier(.4,0,.2,1),
              transform .75s cubic-bezier(.32,.72,0,1);
 }
-.ddp-mx--dots .ddp-mx-dots{width:18px;opacity:1;transform:scale(1)}
+.ddp-mx--dots .ddp-mx-dots{width:18px;opacity:1;margin-left:6px;transform:scale(1)}
 .ddp-mx--ring .ddp-mx-dots,
 .ddp-mx--bar .ddp-mx-dots{transform:scale(.35)}
 .ddp-mx-dots > span{
@@ -620,11 +628,17 @@ window.__ModuleLoader__.load({
   max-width:0;opacity:0;margin-left:0;
   transition:max-width .3s cubic-bezier(.4,0,.2,1),opacity .2s ease,margin-left .3s cubic-bezier(.4,0,.2,1);
 }
-.ddp-mx--bar .ddp-mx-rate{max-width:80px;opacity:.85;min-width:52px;text-align:right}
+.ddp-mx--bar .ddp-mx-rate{max-width:80px;opacity:.85;min-width:52px;margin-left:6px;text-align:right}
 .ddp-mx-extra{
   flex:0 0 auto;opacity:.6;margin-left:6px;
   transition:margin-left .3s;
 }
+/* Nothing visible after the shape in ring/dots states, so the capsule's right
+   padding must not still reserve room for the collapsed bodies. The ring is a
+   symmetric 13px dot in a 22px capsule: 8px on both sides, with the zero-width
+   siblings contributing no margin of their own. */
+.ddp-mx--ring,
+.ddp-mx--dots{padding-right:8px}
 /* Hover-to-read detail. Painted above the chip and pointer-transparent, so it
    never blocks the control next to it. The wording differs per body: a
    fraction for the bar, the kind + elapsed for the ring, nothing for the dots. */
@@ -1344,6 +1358,12 @@ window.__ModuleLoader__.load({
       /** Real bytes: size, optional total, optional rate. */
       download(task, ctx) {
         if (task.unresolved) return { name: '载入中...', meta: ctx.elapsed + 's' }
+        // No byte has been counted yet. For aria2c that is the preallocation
+        // window, which can last a while on a large file: its bitmap does not
+        // exist yet, so the host deliberately reports nothing rather than the
+        // preallocated size. Saying "0 B / 7 GiB · 0 B/s" there is a claim the
+        // plugin cannot back up, and it reads as a stalled download.
+        if (ctx.preparing) return { name: task.label || '下载中...', meta: '准备中...' }
         const size = ctx.hasTotal
           ? fmtBytes(ctx.bytes) + ' / ' + fmtBytes(ctx.total)
           : fmtBytes(ctx.bytes)
@@ -1360,6 +1380,23 @@ window.__ModuleLoader__.load({
             task.phase === 'applying' ? '插件安装中...应用配置中...' : '插件安装中...下载中...',
           meta: ctx.elapsed + 's',
         }
+      },
+      /**
+       * A package manager run (npm / pnpm / pip / docker pull …). It reports no
+       * byte count, so the card carries a clock and a verb — never a percentage.
+       * The verb comes from the command, because "插件安装中" is wrong for `npm
+       * install` and "下载中" is wrong for `docker pull`.
+       */
+      pkg(task, ctx) {
+        // `label` carries the matched verb from the host; the demo card has only
+        // the raw command in `log`, so either is enough to pick the wording.
+        const command = String(task.label || task.log || '')
+        const what = /docker|ollama/i.test(command)
+          ? '拉取镜像中...'
+          : /pip|uv\b/i.test(command)
+            ? '安装 Python 包中...'
+            : '安装依赖中...'
+        return { name: what, meta: ctx.elapsed + 's' }
       },
       /** A single page fetch: only a clock, because nothing is measurable. */
       fetch(task, ctx) {
@@ -1395,6 +1432,18 @@ window.__ModuleLoader__.load({
         elapsed: secs(task.elapsedMs),
       }
       ctx.hasTotal = Number.isFinite(ctx.total) && ctx.total > 0
+      // Nothing measured yet and nothing moving: the transfer has not produced a
+      // first byte count. `bytes` is 0 either because nothing has arrived or
+      // because the host is deliberately withholding a preallocated size, so the
+      // card says "preparing" instead of inventing a number.
+      //
+      // Deliberately NOT gated on `done`: a `run_in_background` download has
+      // `done: true` from its first tick, because the tool call returned at once
+      // while the job kept running. Gating on it hid "preparing" for exactly the
+      // case it was written for — aria2c, which preallocates for a minute before
+      // its first bitmap save. A genuinely finished task has bytes > 0 and never
+      // reaches here; one that died at zero retires within a few ticks.
+      ctx.preparing = ctx.bytes === 0 && ctx.speed === 0
 
       const build = VIEWS[task.kind] || fallbackView
       const { name, meta } = build(task, ctx)
@@ -1720,9 +1769,14 @@ window.__ModuleLoader__.load({
       const kind = String(task.kind || '')
 
       // Only a download with a known total has a fraction worth drawing. Every
-      // other shape would have to invent one.
+      // other shape would have to invent one. A transfer that has counted no
+      // byte yet (aria2c preallocation, or a connection still being made) is
+      // not 0% — it is not measuring yet — so it falls through to the ring.
+      // Not gated on `done`: a background download is `done` from its first
+      // tick while the job runs on (see the same note in `describe`).
+      const preparing = kind === 'download' && bytes === 0 && speed === 0
       const percent =
-        kind === 'download' && hasTotal && !task.unresolved
+        kind === 'download' && hasTotal && !task.unresolved && !preparing
           ? clamp((bytes / total) * 100, 0, 100)
           : null
 
@@ -1759,7 +1813,9 @@ window.__ModuleLoader__.load({
             : kind === 'install'
               ? '安装中'
               : kind === 'download'
-                ? '下载中'
+                ? preparing
+                  ? '准备中'
+                  : '下载中'
                 : '处理中'
       const elapsed = secs(task.elapsedMs)
       const bits = [label + (elapsed > 0 ? ' · ' + elapsed + 's' : '')]
@@ -2501,7 +2557,7 @@ window.__ModuleLoader__.load({
           { className: 'ddp-set-note' },
           '调试模式关闭（默认）时，浮层只显示真实下载；没有下载就完全不显示，不占位、不误导。',
           h('br'),
-          '打开调试模式后，没有下载时会出现一条把手，鼠标移到把手上展开 5 种形态的示例卡片（下载 / 安装 / 抓取 / 搜索 / 载入中），用来比对 UI；',
+          '打开调试模式后，没有下载时会出现一条把手，鼠标移到把手上展开 5 种形态的示例卡片（下载 / 安装 / 抓取 / 搜索 / 安装依赖），用来比对 UI；',
           '一旦有真实下载，示例自动让位，有几个任务就只显示几张卡片。',
           h('br'),
           '能拿到真实进度：curl / wget / Invoke-WebRequest -OutFile / git clone 把文件落盘到本地时——',

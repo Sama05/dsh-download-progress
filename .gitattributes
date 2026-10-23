@@ -1,0 +1,18 @@
+# Normalise line endings in the repository, not on each machine.
+#
+# `core.autocrlf=true` is the Windows default and would otherwise store CRLF for
+# every file here, which makes the same commit look different depending on who
+# checked it out. These sources are plain text read by Node and the browser, so
+# LF in the repository is the honest representation.
+* text=auto eol=lf
+
+# Never touch binary fixtures or images: a line-ending pass corrupts them.
+*.png binary
+*.jpg binary
+*.zip binary
+*.bin binary
+*.svg text
+
+# Windows batch/PowerShell fixtures stay CRLF as Windows tooling expects.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf

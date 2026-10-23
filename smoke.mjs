@@ -287,6 +287,8 @@ for (const needle of ['11.8 MB / 28.3 MB · 5.00 MB/s', '插件安装中...下�
 }
 console.log('  ok all five overlay variants')
 
+CANNED_TASKS = CANNED_TASKS_BASE
+
 /* ---- settings page ---- */
 
 const settingsTree = rendered['settings.section']
@@ -567,7 +569,7 @@ let peekText = []
 walk(peekTree, 0, peekText)
 console.log('  peek cards =', peekCards.length, '| texts:', JSON.stringify(peekText))
 if (peekCards.length !== 5) throw new Error('peek should render all 5 sample shapes, got ' + peekCards.length)
-for (const needle of ['node-v20.11.0-win-x64.zip', '插件安装中...下载中...', '正在抓取网页中...', '正在搜索「下载进度条 插件开发」中...请稍后', '载入中...']) {
+for (const needle of ['node-v20.11.0-win-x64.zip', '插件安装中...下载中...', '正在抓取网页中...', '正在搜索「下载进度条 插件开发」中...请稍后', '安装 Python 包中...']) {
   if (!peekText.some((t) => String(t).indexOf(needle) >= 0)) throw new Error('peek missing: ' + needle)
 }
 if (!findByClass(peekTree, 'ddp-anim--in').length) throw new Error('peek must play the enter animation')
@@ -1033,6 +1035,30 @@ if (String(unresolvedTip.props.children).indexOf('2.86 MB') < 0)
   throw new Error('the ring detail must still report how much landed, got ' + JSON.stringify(unresolvedTip.props.children))
 console.log('  ok indeterminate = ring body, wording moved into the hover tip')
 
+// Zero measured bytes and zero speed is "preparing", not "0 B / 7 GiB · 0 B/s".
+// aria2c spends this window preallocating the file and its bitmap does not exist
+// yet, so the host withholds the size on purpose; the card must say so instead of
+// painting a 0% bar that looks like a stall.
+CANNED_TASKS = [
+  { id: 'p', kind: 'download', sessionId: TEST_SESSION, label: 'win11.iso', bytes: 0, total: 7774558208, speed: 0, elapsedMs: 4000 },
+]
+const preparingTip = findByClass(renderInline(), 'ddp-mx-tip')[0]
+if (String(preparingTip.props.children).indexOf('准备中') < 0)
+  throw new Error('a download with no byte counted yet must read 准备中, got ' + JSON.stringify(preparingTip.props.children))
+CANNED_TASKS = [
+  { id: 'p2', kind: 'download', sessionId: TEST_SESSION, label: 'win11.iso', bytes: 0, total: 7774558208, speed: 0, elapsedMs: 4000, done: true },
+]
+const bgPreparingTip = findByClass(renderInline(), 'ddp-mx-tip')[0]
+if (String(bgPreparingTip.props.children).indexOf('准备中') < 0)
+  throw new Error('a background download is done:true from its first tick and must still read 准备中, got ' + JSON.stringify(bgPreparingTip.props.children))
+CANNED_TASKS = [
+  { id: 'p3', kind: 'download', sessionId: TEST_SESSION, label: 'win11.iso', bytes: 7774558208, total: 7774558208, speed: 0, elapsedMs: 60000, done: true },
+]
+const finishedTip = findByClass(renderInline(), 'ddp-mx-tip')[0]
+if (String(finishedTip.props.children).indexOf('准备中') >= 0)
+  throw new Error('a finished task has bytes and is never preparing, got ' + JSON.stringify(finishedTip.props.children))
+console.log('  ok zero bytes and no speed = 准备中 (background done:true included)')
+
 // Nothing at all: not even the kind of work. Three breathing dots, no words.
 CANNED_TASKS = [{ id: 'x', sessionId: TEST_SESSION }]
 const dotsTree = renderInline()
@@ -1151,3 +1177,18 @@ CANNED_BACKGROUND = []
 
 console.log('\nSMOKE OK — bundle loads,', Object.keys(injectors).length, 'slots register, settings page renders', texts.length, 'text nodes')
 
+
+/* ---- overlay: 准备中 before the first real byte ---- */
+// The overlay is what the user actually watches, and it goes through describe()
+// rather than briefOf(). A download with no measured byte must print 准备中 there
+// too — including the background case, whose task is done:true from tick one.
+// Placed last: an extra render here cannot disturb the debug-mode effect above.
+CANNED_TASKS = [
+  { id: 'p', kind: 'download', sessionId: TEST_SESSION, label: 'CentOS-Stream-10.iso', bytes: 0, total: 10801774592, speed: 0, elapsedMs: 40000, done: true },
+]
+const preparingTexts = []
+walk(renderOverlay(), 0, preparingTexts)
+if (!preparingTexts.some((t) => String(t).indexOf('准备中') >= 0))
+  throw new Error('the overlay must say 准备中 before the first real byte, got ' + JSON.stringify(preparingTexts.map(String)))
+console.log('\n  ok overlay says 准备中 before the first real byte')
+CANNED_TASKS = CANNED_TASKS_BASE

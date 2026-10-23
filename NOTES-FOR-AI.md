@@ -76,12 +76,54 @@ DSH **没有**"下载进度"这类事件。工具层只有两个端点事件：
 | `wget -O <文件>` | 同上 |
 | `Invoke-WebRequest -OutFile <文件>` | 必须有 `-OutFile` |
 | `git clone <url> <dir>` | 采样目录总体积 |
+| `powershell -File <脚本>` / `pwsh -File <脚本>` | 静态解析脚本里的落盘路径，见 2.1.1 |
 
 进度 = 目标文件体积 / `Content-Length`；速度 = 滑动窗口（约 1s 跨度）算出的字节速率。
 两者都**每秒采样一次**，Client 每秒拉一次。
 
+`git clone` 的目标是**目录**，而 Windows 上 `stat(dir).size` 恒为 0——早期版本直接
+`stat` 目标，于是整个 clone 期间读到「0 字节、无增长」，空闲计数器几秒后就把卡片收了。
+现在 clone 任务带 `clone` 标记，采样走 `directoryBytes()` 累加目录树（跳过符号链接/junction，
+最多 20000 条目、12 层，超限就停在当时的和，宁可少数也不会卡住主线程）。
+
 卡片底部另有一行状态信息（`.ddp-log`，透明度 0.55，单行截断）：显示**下载来源 URL**；
 命令里没有 URL 时退回目标文件路径，再退回命令行首行。只显示这一行，不堆历史。
+
+### 2.1.1 `-File` 脚本这条路（`script.js`）
+
+**为什么需要**：`powershell -NoProfile -ExecutionPolicy Bypass -File E:\win22h2\get-iso.ps1`
+这行命令里没有任何路径、没有下载器名、没有 `-OutFile`，`classify()` 的三条下载判定全不沾，
+在分类阶段就被否掉。但脚本里明明有 `Invoke-WebRequest -OutFile` 或 `& curl.exe -o $Out`。
+
+**做过又被否掉的两条路（别再试）**：
+
+- **进程 IO 计数**：`Get-CimInstance Win32_Process` 的 `ReadTransferCount` / `WriteTransferCount`
+  只统计**文件/设备**读写，**socket 流量完全不计入**。实测 12 MiB 下载只让它动了 0 字节。
+- **TCP 扩展统计**：`GetPerTcpConnectionEStats`（iphlpapi）理论上能按 4-tuple 拿 `DataBytesIn`，
+  但需要先 `SetPerTcpConnectionEStats` 启用、要遍历 `Get-NetTCPConnection`、还要处理端口字节序，
+  单次开销到不了 1 Hz 采样预算，且子进程（`& curl.exe`）的连接归属 PID 判定不稳。放弃。
+
+**现在这条路**：检测到 `-File <路径>` → 同步读一次脚本（`readFileSync`，实测
+**0.409 ms / 1612 字节**）→ 纯文本解析出落盘路径和 URL → 后面跟普通下载一样走文件大小采样。
+
+能算的（`script.js` 的 `parseScript`）：
+
+- 单层字面量赋值：`$iso = "D:\x\a.iso"` / `$Out = 'x.iso'`
+- `param([string]$Out = 'C:\x.iso')` 的默认值
+- `$env:USERPROFILE` / `$env:TEMP` 等环境变量展开（大小写不敏感）
+- `Join-Path $dir 'name'` 的链式求值（`Join-Path` 嵌套也吃）
+- `-OutFile` / `-o` / `--output` / `-Destination` 后面的路径参数
+- 脚本里的 URL（供 `Content-Length` 探测）
+
+**一律不猜**（解析不出就返回空 → 不出卡片，绝不出错卡片）：
+
+- 循环里的赋值（`foreach` / `for` 体内）
+- `Get-Content cfg.json` 之类运行时才知道的取值
+- `+` 拼接、here-string、`$(...)` 子表达式
+- 含 `$` / `%` 无法解析的路径
+
+安全边界：只读、只解析、不执行；`classify()` 全程 try/catch，观测失败绝不影响被观测的 tool call。
+
 
 ### 2.2 只能显示"进行中"（不确定态进度条）
 
@@ -90,32 +132,65 @@ DSH **没有**"下载进度"这类事件。工具层只有两个端点事件：
 | 插件安装 | `插件安装中...下载中...`；`applying` 阶段换成 `插件安装中...应用配置中...` | pnpm 输出的**最新一行**（整块输出只取最后一行） |
 | 网页抓取 | `正在抓取网页中...<N>s`，秒数实时递增 | 被抓取的 URL |
 | 搜索（research/web_search 等） | `正在搜索「<摘要，最多 50 字>」中...请稍后` | `工具名 · 完整查询词`（不受 50 字限制） |
+
+搜索卡片的标题取自 `searchQuery(args)`：真实工具（`web_search` / `advanced_search` /
+`multi_search`）声明的是 **`queries` 数组**，早期只读 `query`/`question`/`q` 三个标量键，
+于是真实调用一律取到空串，卡片渲染成 `正在搜索「…」中` 完全没有主题。现在先读标量
+（仍优先，兼容旧参数），没有就把 `queries` 用 ` · ` 连起来。
 | 其他包管理器命令（pip/npm/docker pull…） | `载入中...`（统一未定义条，后续若拿到数据流再细化） | 命令行首行 |
 
 ### 2.3 拿不到的（明确说明）
 
 - **`Invoke-WebRequest` 不带 `-OutFile`**：全在内存里，磁盘上没有可采样的文件 → 不触发。
-- **目标是目录/多文件**：只采样已知的顶层目标。
+- **目标是目录/多文件**：只采样已知的顶层目标。`git clone` 是唯一的例外，
+  见下一条。
 - **命令里用变量拼路径**（如 `-o $dst`）：插件只能读到命令行文本里的字面量 `$dst`，解析出的路径不存在 → 任务约 5 秒后被回收，不显示进度。
 - **纯内存下载 / API 调用**：无落盘 → 无进度。
+- **上传（`curl -T` / `--upload-file`）**：本端不写文件，卡片只可能永远停在 0 B，
+  所以**整段排除**。排除是**按命令段**判的：`curl -T a u && curl -o out u2` 这种
+  既传又下的命令仍然出卡片（下载那一段确实在长）。`-T` 只在与 `curl` 同一个命令段、
+  且作为独立参数时才算，`git commit -m "add -T support"`、URL 里的 `?upload-file=`
+  都不误判。
+- **`-File` 脚本里路径要跑起来才知道**：`Get-Content cfg.json` 取值、`+` 拼接、here-string、
+  `$(...)` 子表达式、循环内赋值——一律不猜，不出卡片（理由见 2.1.1）。脚本被改写后，
+  要等**下一次**工具调用才会重新读，不会热更新。
 
 ---
 
 ## 3. UI 独立抽出的做法（改样式只动一处）
 
-Client 半是单文件 `client.js`，样式与结构分离得很干净：
+Client 半**发布产物**是单文件 `client.js`（宿主按一个 bundle 下发，它不能写 `import`），
+但**源码**在 `src/client/` 里按职责分片，由 `scripts/build-client.mjs` 按固定顺序拼回去：
 
 ```
-client.js
-├── CSS            ← 所有视觉样式都在这一个模板字符串里（改外观只动这里）
-├── describe(task) ← 数据 → 文案的映射（改文案只动这里）
-├── taskStore      ← 全插件唯一的轮询器（一个 fetch / 一个定时器 / 一份 tasks）
-├── Card           ← 单条进度卡片（结构）
-├── Overlay        ← 浮层列表容器（读 taskStore，自己不再 fetch）
-└── InlineBar      ← 对话框工具行里的简易条（读 taskStore，见 §3.3）
+src/client/
+├── 01-prologue.js      ← 顶部注释 + 模块头
+├── styles-open.js      ← CSS 模板字符串的开头（后面插 css/*.css）
+├── css/overlay.css     ← 浮层视觉（改外观只动这里）
+├── css/inline.css      ← 简易条视觉
+├── css/settings.css    ← 设置页视觉
+├── styles-close.js     ← 模板字符串收尾
+├── 20-utils.js         ← 纯函数（截断、去重、格式化）
+├── 30-settings.js      ← 设置项与默认值
+├── 40-samples.js       ← 调试模式的模拟数据
+├── 50-presence.js      ← 「有没有任务在跑」的探测
+├── 60-data.js          ← taskStore（全插件唯一的轮询器）+ describe()
+├── 70-views.js         ← VIEWS 表：wire → view-model
+├── 75-sessions.js      ← 会话 id/标题解析
+├── 78-scope.js         ← 当前会话过滤
+├── 80-drag.js          ← 拖动定位
+├── 85-inline.js        ← InlineBar（对话框简易条，见 §3.3）
+├── 90-overlay.js       ← Card + Overlay（浮层）
+├── 95-settings-page.js ← 设置页
+└── 99-plugin.js        ← 三个槽位挂载
 ```
 
-- **改颜色/圆角/动画/位置** → 只改 `CSS` 常量。
+**改任何一片都必须跑 `node scripts/build-client.mjs`**，它把 `src/client/**` 拼成 `client.js`；
+`node scripts/build-client.mjs --check` 会在产物过期时失败并指出第一处差异（`npm test` 第一条就是它）。
+顺序是显式写死的一张表，不是目录序：浏览器从上往下读，切片顺序错了会出 TDZ 错误，
+而这种错误**在 Node 里看不见，只在真机 UI 里炸**。
+
+- **改颜色/圆角/动画/位置** → 只改 `src/client/css/*.css`。
 - **改文案/文案格式** → 只改 `describe()`；简易条的极简文案单独在 `briefOf()`（§3.3）。
 - **改卡片结构** → 只改 `Card()`。
 - **改简易条结构** → 只改 `InlineBar()`。
@@ -638,6 +713,18 @@ DNS / TLS 握手，文件尚不存在。首个 tick 读到 0 字节就累加 `id
 服务返回「403 + content-length: 1」断言 `total` 仍为 `null`；临时撤掉这行修复
 该测试会失败，恢复后通过。
 
+**⑥ 目标文件是旧的，卡片第一帧就锁死在 100 %**
+`sample()` 只 stat 目标文件，不区分「这个文件是这次下载写的」还是「上次下载留下的」。
+重跑一次已经下完的 `curl -o file` 时，磁盘上那个 29.6 MB 的旧文件被直接当成测量值，
+卡片从第一帧就显示 `29.6 MB / 29.6 MB`、速度 0，然后被 sweep 当成已完成退休——
+用户看到的是「下载卡闪一下就没了」。修法：任务记 `freshTarget`，在下载器自己碰过文件之前
+不计量（curl 会截断、aria2c 会预分配、续传会重写尾部，这三种都会把 mtime 推进本次派发的窗口）。
+判定条件是 `st.mtimeMs < task.startedAt - TARGET_FRESH_SLACK_MS`，这个 2000 ms 容差**不能去掉**：
+NTFS 的写入时间戳有亚毫秒滞后，而 `Date.now()` 只有毫秒分辨率，
+首帧就写盘的派发会得到比 `startedAt` 早几分之一毫秒的 mtime，严格 `>=` 比较会让那些卡片永远停在 0 B
+（实测 `stress-host.mjs` 的 24 并发样本里恰好有一张因此卡死）。旧文件是几分钟到几小时前的，
+两秒窗口足以分开两者。未碰过文件的场景仍由 `START_GRACE_MS` + 空闲计数兜底退休。
+
 客户端侧另有一处容错（不是 bug 修复，是设计）：`POLL_FAILURES_BEFORE_CLEAR`
 允许连续多次轮询失败才清空列表，避免宿主重启、路由短暂 502 时浮层闪一下消失。
 `cache: 'no-store'` 已足够，实测没有出现 304 语义问题。
@@ -707,28 +794,79 @@ node smoke-host.mjs
 
 ## 7. 文件清单
 
+**每个目录都有一个同名 barrel 文件**（`detect.js` / `state.js` / `script.js` / `background.js`），
+只做 re-export，所以外部调用方永远是 `import ... from './detect.js'`，不必知道内部怎么分。
+`client.js` 是唯一的例外——它是**构建产物**，源码在 `src/client/`。
+
 | 文件 | 作用 |
 | --- | --- |
 | `package.json` | 包声明；`dsh.bundle.patch` 指向 `cordis.patch.yml`；`dsh.client` 声明 Web 客户端半 |
 | `cordis.patch.yml` | bundle 挂载：`insert` 一行 `id: dsh-download-progress` |
-| `index.js` | Host 半入口：只做接线（订阅事件、起采样定时器、注册路由） |
-| `detect.js` | 工具分类：哪些工具算下载/搜索/抓取/安装，以及命令行里解析目标路径与 URL |
-| `state.js` | 任务状态机：建任务、每秒采样文件大小、算速度、收尾回收 |
+| `index.js` | Host 半入口：只做接线（订阅事件、起采样定时器、注册路由）。**最外层只此一个文件** |
+| `detect.js` | barrel：工具分类的公开面 |
+| `detect/tools.js` | 哪些工具名算搜索 / 抓取 / shell |
+| `detect/patterns.js` | 旗标正则，以及建在正则上的两个 token 读取器 |
+| `detect/programs.js` | 「这一段在跑哪个程序？」 |
+| `detect/segments.js` | 一条命令在哪结束、下一条在哪开始 |
+| `detect/vars.js` | 普通赋值，以及命令真正生效的 cwd |
+| `detect/remote.js` | URL 想被存成什么名字 |
+| `detect/targets.js` | 命令会写到哪些路径 |
+| `detect/downloaders.js` | aria2c 与 git，两个不靠旗标的下载器 |
+| `detect/classify.js` | 判定本身 |
+| `script.js` | barrel：`-File` 静态解析的公开面 |
+| `script/read.js` | 读一次脚本文件（含编码回退），绝不执行 |
+| `script/comments.js` | 先剥注释——注释里的 `-o xxx` 不是参数 |
+| `script/vars.js` | `$Var = '...'` 的收集与解析（含 `$env:`、`Join-Path` 链） |
+| `script/targets.js` | 从调用点解析出落盘路径 |
+| `script/plan.js` | 组装成一份 plan（含 URL / 变量表） |
+| `script/tuning.js` | 大小上限与超时 |
+| `state.js` | barrel：任务簿记的公开面 |
+| `state/tuning.js` | 每一个时长与上限，都注明了它是被哪个 bug 定下来的 |
+| `state/registry.js` | 任务表本身，以及别人读它的那几个把手 |
+| `state/aria2.js` | `-i` 清单：读取、解析成真实路径 |
+| `state/probes.js` | 提供分母的 HEAD 探针 |
+| `state/disk.js` | 磁盘上真正的字节数（aria2c bitmap、git clone 目录树） |
+| `state/begin.js` | 一次 dispatch → 一张卡 |
+| `state/sample.js` | 一个 tick：量目标、算速率 |
+| `state/sweep.js` | 收掉完成的卡；install 事件 |
+| `state/snapshot.js` | Client 轮询的那份 wire 形状 |
+| `background.js` | barrel：后台任务簿记的公开面 |
+| `background/tuning.js` | 宽限期、linger、reconcile 间隔、行数上限 |
+| `background/tables.js` | 哪些工具算「等待」、哪些算 shell |
+| `background/tools.js` | 工具名/参数的读取助手 |
+| `background/jobs.js` | bash 后台 job 的生产者 |
+| `background/subagent.js` | 子代理的生产者 |
+| `background/workflow.js` | workflow 的生产者 |
+| `background/waits.js` | `waiting` 的推断（owner 是否阻塞在等它） |
+| `background/snapshot.js` | 后台那几行的 wire 形状 |
 | `utils.js` | 无副作用的纯函数（截断、取行、去重、URL 提取） |
-| `client.js` | Client 半：`CSS` + `describe()` + `Card` + `Overlay` + 设置页 |
+| `client.js` | **构建产物**：`src/client/**` 按序拼接。不要手改，改源码再 build |
+| `src/client/*` / `src/client/css/*` | Client 半源码，见 §3 |
+| `scripts/build-client.mjs` | 拼接 + `--check` 漂移守卫 |
 | `smoke.mjs` | 离线冒烟测试（假 window + 假 React，不需要浏览器） |
 | `smoke-host.mjs` | Host 半离线测试（假 `fs`，不需要启动 DSH） |
+| `script.test.mjs` | `script.js` 的单元测试：赋值收集、值解析、目标提取、不可解析必须返回空、退化输入、编码矩阵、`-File` 路径解析、开销 |
+| `contract.mjs` | 机器校验 Host/Client 契约（见 `CONTRACT.md`） |
 | `stress-host.mjs` | Host 半压力测试（30 并发、畸形入参、上限与 wire 类型） |
 | `stress-round2.mjs` | 第二轮压测：1000 张卡、探针并发上限、模拟一小时 sweep、恶意会话名/日志、边 sweep 边注册 |
-| `NOTES-FOR-AI.md` | 本文档：实现笔记。刻意不叫 `AGENTS.md`，避免被 DSH 当项目指令每轮自动注入（约 11K token） |
+| `stress-client.mjs` | Client 半压测：50 卡、脏数据、路由挂掉、320px 窄窗 |
+| `bench.mjs` | 性能基准（`--json` / `--save` / `--after`），基线在 `bench/baseline.json` |
+| `NOTES-FOR-AI.md` | 本文档：实现笔记。刻意不叫 `AGENTS.md`，避免被 DSH 当项目指令每轮自动注入 |
 | `locale/en.json` / `locale/zh.json` | 插件元数据标题（插件列表里显示的名字） |
 | `icon.svg` | 插件图标 |
 | `LICENSE` | MIT 许可证 |
 | `.gitignore` | 忽略 `node_modules/`、测试下载残留（`*.bin`、`*.log`） |
 
-拆成四个 Host 文件的理由：`index.js` 曾是 340 行、混着正则、状态机和接线，改一处要通读全部。
-现在分类规则改 `detect.js`、采样逻辑改 `state.js`、纯函数改 `utils.js`，`index.js` 只负责把三者接到宿主上。
-四个文件都是同目录下的相对 `import`，由 Node ESM 原生解析，不需要打包器，也不增加依赖。
+**拆分的理由（2026-10-23 重构）**：`index.js` 曾是 340 行、混着正则、状态机和接线，改一处要通读全部；
+`client.js` 一度 2611 行、`state.js` 1219 行、`detect.js` 929 行——单个文件超长时，
+"改颜色"和"改采样"落在同一屏里，AI 与人都会改错地方。现在按职责分片，**除 `client.js`
+这个拼接产物外，最大一片 335 行**（`src/client/90-overlay.js`），Host 侧最大 212 行。
+Host 侧是原生 ESM `import`（Node 自己解析，不需要打包器、不增加依赖），
+Client 侧因为宿主只下发一个 bundle，用 `scripts/build-client.mjs` 做纯字符串拼接，产物仍是单文件。
+
+> **新增源文件必须同时进 `package.json` 的 `files` 数组。** 目录级条目（`detect/`、`state/`、
+> `script/`、`background/`）已覆盖子文件；但 `src/`、`scripts/`、`bench/` **不进包**
+> ——`client.js` 已经是产物，装包的人不需要源码。`background.js` 漏过一次（`f12693e` 修）。
 
 ---
 
@@ -741,9 +879,9 @@ node smoke-host.mjs
 | 优势 | 具体表现 |
 | --- | --- |
 | **零核心改动** | 不 patch 宿主、不改 `cordis.yml`、不碰 `agent-loop`。用的是官方公开的扩展点：`tools/execute` 瀑布钩子、`plugin-manager/install-log` 事件、`webServer.register` 路由、`shell.overlay` / `settings.section` / `conversation.input.left` 插槽。宿主升级时这些名字变了才会坏，见 §5.1 |
-| **零第三方依赖** | Host 半只用 `node:fs` / `node:path`；Client 半只用宿主已提供的 `react`。没有 npm 依赖，没有构建步骤，`git clone` 下来就能装 |
+| **零第三方依赖** | Host 半只用 `node:fs` / `node:path`；Client 半只用宿主已提供的 `react`。**没有 npm 依赖**，`git clone` 下来就能装。Client 侧有一个拼接步骤（`scripts/build-client.mjs`），但它只用 `node:fs`，不需要 `npm install`、不需要打包器；发布包里带的是拼好的 `client.js`，安装的人不跑它 |
 | **不绑会话、跟着文件走** | 用户把 `curl` 丢进后台（`run_in_background`）后工具会提前返回，插件不看工具何时结束，而是看**文件是否还在变大**——最后 3 秒没长才收起。这是唯一能覆盖后台下载的信号 |
-| **UI 与逻辑彻底分离** | 全部样式集中在 `client.js` 顶部的 `CSS` 常量和一个 `<style>` 注入点，所有颜色走 `--ddp-*` / `--dsw-alias-*` 变量。改外观不动一行逻辑，换主题只加一个 token 对象 |
+| **UI 与逻辑彻底分离** | 全部样式集中在 `src/client/css/*.css`（拼进 `client.js` 顶部的 `CSS` 模板字符串）和一个 `<style>` 注入点，所有颜色走 `--ddp-*` / `--dsw-alias-*` 变量。改外观不动一行逻辑，换主题只加一个 token 对象 |
 | **出现不推挤布局** | 挂在 `shell.overlay`（浮动层，不参与排版），`position: fixed` + `transform` 定位，且拖动只写 `top/left`。出现/收起/悬停展开都不会让聊天区跳动 |
 | **离线可测** | `smoke.mjs` 用假 window + 假 React 跑真实组件树，覆盖 30+ 条断言：槽位注册、卡片渲染、拖动基准、悬停宽限期、主题切换、hook 数量一致性。不需要浏览器、不需要启动 DSH |
 | **可扩展的主题** | 内置跟随系统/亮色/暗色，且支持从 `localStorage` 读外部主题（JSON 里写一套 `--ddp-*` 变量即可），不必改代码 |
@@ -814,6 +952,80 @@ async function probeTotal(url, task) {
 
 `snapshot()` 与 `sweep()` 本身没有改：它们的复杂度已经是线性的，且实测远低于预算，
 提前优化只会换来没必要的复杂度。
+
+---
+
+## 8.5 代码规范与性能基线（2026-10-23 重构）
+
+### 8.5.1 依据（都是可查的原始文档，不是印象）
+
+| 规则 | 默认/建议值 | 出处 |
+| --- | --- | --- |
+| `max-lines` | 默认 **300**，文档原话「Recommendations usually range from **100 to 500 lines**」 | https://eslint.org/docs/latest/rules/max-lines |
+| `max-lines-per-function` | 默认 **50**；Airbnb 声明 50 | https://eslint.org/docs/latest/rules/max-lines-per-function |
+| `complexity` | 默认 **20**；Airbnb 声明 20 | https://eslint.org/docs/latest/rules/complexity |
+| `max-depth` / `max-params` / `max-statements` | Airbnb：4 / 3 / 10 | airbnb/javascript `rules/style.js` |
+| `max-len` | Airbnb **100**；Google **80** | airbnb/javascript；https://google.github.io/styleguide/jsguide.html §4.4 |
+| `import/no-cycle` | **必须为 0**，文档原文「Cyclic dependency are **always** a dangerous anti-pattern」 | https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/no-cycle.md |
+| Google JS Style Guide | **完全不管文件行数**，只管 80 列宽；且顶部横幅已声明「no longer being updated, migrate to TypeScript」 | 同上 |
+
+两个**官方文档明写的陷阱**，决定了不能只开一条规则：
+
+- `complexity` 把默认参数、解构默认值、可选链 `a?.b?.c` 的每一段、`||=` / `&&=` 各算一条分支
+  ⇒ 拆函数时把默认值挪到参数上，复杂度反而升高。
+- `max-lines-per-function` 文档指出：16 行嵌套长链只算 1 statement / complexity = 1
+  ⇒ 长链不会被它逮住。**两条必须同时开，不能互替。**
+
+（完整调研报告：`D:\AIworks\notes\js-esm-code-standards-research.md`，204 行，含 10+ 页面正文摘录与未验证项。）
+
+### 8.5.2 落地结果
+
+| 项 | 重构前 | 重构后 |
+| --- | --- | --- |
+| 最大源文件 | `client.js` 2611 行 | `src/client/90-overlay.js` **335 行**（`client.js` 是拼接产物） |
+| 次大源文件 | `state.js` 1219 行 | `src/client/85-inline.js` 322 行 |
+| Host 侧最大文件 | `detect.js` 929 行 | `state/probes.js` 212 行 |
+| 源文件总数 | 15 | 58 个 js/css（另有 4 个测试脚本、`lab/` 不计） |
+| 循环依赖 | 未校验 | **0**（分层 import，每层只 import 上层） |
+| barrel 风险 | — | 四个 barrel 只做 re-export，**不含逻辑**，所以不会引入「barrel 导致 tree-shaking 失效 / 隐式循环」那两个经典问题 |
+
+barrel 的代价是真实存在的（多一次模块解析、IDE 跳转多一跳），这里接受它是因为：
+`package.json` 的 `exports` 和所有测试都写着 `./detect.js` 这类路径，改成目录会破坏外部契约；
+而 barrel 只 re-export、不含逻辑，`import/no-cycle` 仍能保证无环。
+
+### 8.5.3 性能基线（`npm run bench`，中位数，本机）
+
+重构前后各跑一次，基线存 `bench/baseline.json`，重构后存 `bench/after.json`：
+
+| benchmark | 前 | 后 | 变化 |
+| --- | --- | --- | --- |
+| `classify/curl` | 0.0088 ms | 0.0075 ms | −15% |
+| `classify/-File` | 0.0068 ms | 0.0075 ms | +10% |
+| `script/plan` | 0.3559 ms | 0.3187 ms | −10% |
+| `targets/curl` | 0.0074 ms | 0.0093 ms | +26% |
+| `targets/8-flags` | 0.0114 ms | 0.0132 ms | +16% |
+| `sample/1-card` | 0.0583 ms | 0.0593 ms | +2% |
+| `sample/30-cards` | 1.4330 ms | 1.4178 ms | −1% |
+| `snapshot/30-cards` | 0.0413 ms | 0.0395 ms | −4% |
+| `client/parse-in-vm` | 0.6404 ms | 0.6406 ms | ±0% |
+| `client/read-bytes` | 0.1558 ms | 0.1671 ms | +7% |
+| `host/import-cost` | 1.3186 ms | 1.3984 ms | +6% |
+
+**怎么读这张表**：`targets/*` 的 +16~26% 是拆分后多了一层函数调用（同一段逻辑从一个大函数
+变成 `targets.js` 调 `patterns.js`），绝对值只差 **0.002 ms**；`host/import-cost` +6% 是
+模块数从 4 涨到 26 的固定解析成本（**1.4 ms，进程启动时一次**）。
+真正每秒都在跑的 `sample/30-cards` 和 `snapshot/30-cards` **没有变慢**——这是重构的验收线。
+所有数字都在微秒级，对「每秒一次、最多 30 张卡」的真实负载可以忽略。
+
+**结论**：拆分换来的是「改一处只读一个不到 320 行的文件」，代价是亚毫秒级的一次性成本。
+
+### 8.5.4 微基准的方法论（`bench.mjs` 头部有同样说明）
+
+- 用 `hrtime.bigint()`，不用 `Date.now()`（后者在 Windows 上只有 ~15.6 ms 分辨率）。
+- 每个 benchmark 先 warm-up：V8 在函数被调用若干次后才优化，而**重构改变函数数量就改变
+  warm-up 曲线**——不 warm-up 的话，拆分本身会被误读成性能回退。
+- 报 **median + p95**，不报平均值：GC 抖动会把平均值拉歪。
+- `--json` 出机器可读结果，`--save` 写基线，`--after` 写 `after.json`，便于前后对比。
 
 ---
 

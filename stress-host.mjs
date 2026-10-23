@@ -92,7 +92,9 @@ try {
   const batch = []
   for (let i = 0; i < N; i++) {
     const file = join(dir, 'f' + i + '.bin')
-    writeFileSync(file, Buffer.alloc(64))
+    // Register first, write second: the sampler only counts bytes the running
+    // downloader produced, so a file that predates the dispatch would be read as
+    // a previous transfer's leftovers.
     batch.push(
       beginTask(
         { callId: 'bulk-' + i, name: 'pwsh' },
@@ -100,6 +102,7 @@ try {
         dir,
       ),
     )
+    writeFileSync(file, Buffer.alloc(64))
   }
   const cost = Date.now() - started
   assert.equal(snapshot().length, N, 'all thirty cards registered')
@@ -171,8 +174,54 @@ try {
   ok('state: an unsettled task cannot outlive the 30 minute ceiling')
 
   /* ------------------------------------------------------------------ */
-  /* 6b. a background card survives the transfer's opening seconds      */
+  /* 6c. a transfer that is still growing outlives the 30 minute ceiling */
   /* ------------------------------------------------------------------ */
+
+  // A 7 GiB ISO over a throttled link runs for hours. The age ceiling exists to
+  // retire cards that never settle, but it used to delete this one at minute 30
+  // while bytes were still arriving — the card vanished exactly when the
+  // remaining time mattered most. Growth has to win over age.
+  const big = join(dir, 'big.iso')
+  const bigTask = beginTask(
+    { callId: 'big-1', name: 'pwsh' },
+    { kind: 'download', command: `curl -o "${big}" ${DEAD}` },
+    dir,
+  )
+  bigTask.done = true
+  const bigBorn = bigTask.startedAt
+  let wrote = 0
+  // 40 simulated minutes, one tick per second near the end so the speed window and
+  // the idle counter both see a live transfer.
+  for (let minute = 1; minute <= 40; minute++) {
+    wrote += 1024
+    writeFileSync(big, Buffer.alloc(wrote))
+    sweep(bigBorn + minute * 60 * 1000)
+  }
+  const bigCard = snapshot().find((s) => s.id === 'big-1')
+  assert.ok(bigCard, 'a growing transfer keeps its card past the 30 minute ceiling')
+  assert.equal(bigCard.bytes, wrote, 'and keeps reporting real bytes')
+  ok('state: a transfer still receiving bytes is not cut off at 30 minutes')
+
+  // The backstop still applies: a day is past any real transfer, including a
+  // 7 GiB ISO over a throttled link.
+  writeFileSync(big, Buffer.alloc(wrote + 1024))
+  sweep(bigBorn + 23 * 60 * 60 * 1000)
+  assert.equal(
+    snapshot().some((s) => s.id === 'big-1'),
+    true,
+    'still alive at 23 hours',
+  )
+  writeFileSync(big, Buffer.alloc(wrote + 2048))
+  sweep(bigBorn + 24 * 60 * 60 * 1000 + 60 * 1000)
+  assert.equal(
+    snapshot().some((s) => s.id === 'big-1'),
+    false,
+    'but the absolute backstop still retires it',
+  )
+  ok('state: the absolute ceiling still bounds a card that never stops growing')
+
+  /* ------------------------------------------------------------------ */
+  /* 6b. a background card survives the transfer's opening seconds      */
 
   const late = join(dir, 'late.bin')
   const lateTask = beginTask(
@@ -218,6 +267,48 @@ try {
   beginTask({ callId: 'dup', name: 'pwsh' }, { kind: 'download', command: 'curl -o b.bin ' + DEAD }, dir)
   assert.equal(snapshot().filter((s) => s.id === 'dup').length, 1, 'one card per callId')
   ok('state: a repeated callId replaces its card rather than stacking one')
+
+  /* ------------------------------------------------------------------ */
+  /* 8b. a retry onto the same file adopts the card, it does not stack    */
+  /* ------------------------------------------------------------------ */
+
+  // `curl -C - -o big.iso …` re-run after a dropped connection writes the very
+  // file the last attempt was writing. A new callId used to mean a second card
+  // over the same bytes: two bars, same numbers, one transfer.
+  const retryPath = join(dir, 'retry.iso')
+  const retryCmd = `curl -C - -o "${retryPath}" ${DEAD}`
+  const first = beginTask({ callId: 'retry-1', name: 'pwsh', agent: { id: 's1' } }, {
+    kind: 'download',
+    command: retryCmd,
+  }, dir)
+  writeFileSync(retryPath, Buffer.alloc(4096))
+  first.done = true
+  sweep(first.startedAt + 1000)
+  const second = beginTask({ callId: 'retry-2', name: 'pwsh', agent: { id: 's1' } }, {
+    kind: 'download',
+    command: retryCmd,
+  }, dir)
+  assert.equal(second.id, 'retry-2', 'the card takes the new dispatch identity')
+  assert.equal(snapshot().filter((s) => s.label === 'retry.iso').length, 1, 'still one card')
+  assert.equal(second.done, false, 'the transfer is running again')
+  assert.ok(second.bytes >= 4096, 'a resume keeps the bytes already on disk')
+  ok('state: a retry onto the same path adopts its card instead of adding one')
+
+  // Two sessions on one shared path are two real things: each keeps its own row.
+  beginTask({ callId: 'shared-a', name: 'pwsh', agent: { id: 'sa' } }, {
+    kind: 'download',
+    command: retryCmd,
+  }, dir)
+  beginTask({ callId: 'shared-b', name: 'pwsh', agent: { id: 'sb' } }, {
+    kind: 'download',
+    command: retryCmd,
+  }, dir)
+  assert.equal(
+    snapshot().filter((s) => s.label === 'retry.iso').length,
+    3,
+    'each session keeps its own row for the same path',
+  )
+  ok('state: the same path in another session still gets its own card')
 
   /* ------------------------------------------------------------------ */
   /* 9. wire contract types                                              */

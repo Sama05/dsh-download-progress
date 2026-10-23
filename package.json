@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-download-progress",
-  "version": "0.1.2",
+  "version": "0.2.1",
   "private": true,
   "description": "Frosted-glass download progress overlay for DeepSeek Harness (DSH)",
   "license": "MIT",
@@ -23,15 +23,24 @@
     "dsh": ">=0.2.0-rc.1"
   },
   "scripts": {
-    "test": "node contract.mjs && node smoke.mjs && node smoke-host.mjs && node stress-host.mjs && node stress-round2.mjs && node stress-client.mjs",
-    "contract": "node contract.mjs"
+    "build": "node scripts/build-client.mjs",
+    "build:check": "node scripts/build-client.mjs --check",
+    "prepublishOnly": "node scripts/build-client.mjs --check",
+    "test": "node scripts/build-client.mjs --check && node contract.mjs && node script.test.mjs && node smoke.mjs && node smoke-host.mjs && node stress-host.mjs && node stress-round2.mjs && node stress-client.mjs",
+    "contract": "node contract.mjs",
+    "bench": "node bench.mjs"
   },
   "files": [
     "index.js",
     "utils.js",
     "detect.js",
+    "detect/",
     "state.js",
+    "state/",
+    "script.js",
+    "script/",
     "background.js",
+    "background/",
     "client.js",
     "cordis.patch.yml",
     "locale/*.json",
