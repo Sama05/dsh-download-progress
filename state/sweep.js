@@ -10,7 +10,6 @@ import { clip, lastLine, text } from '../utils.js'
 import { sample } from './sample.js'
 import { forEachTask, tasks } from './registry.js'
 import {
-  BUSY_GRACE_MS,
   IDLE_TICKS_TO_CLOSE,
   LINGER_MS,
   MAX_GROWING_TASK_MS,
@@ -63,10 +62,20 @@ export function sweep(now, isSessionBusy = null) {
     // every finished card in that session alive forever. Only a download that is
     // still demonstrably moving earns the grace — an install card is driven by
     // host events instead of file growth, so it always qualifies.
-    const busyGrace =
-      busy &&
-      (task.kind !== 'download' ||
-        (task.lastGrowthAt > 0 && now - task.lastGrowthAt < BUSY_GRACE_MS))
+    //
+    // "Still moving" is the idle counter, not a time-since-growth window. It used
+    // to be a two-minute window measured from the last growth, which meant an
+    // interrupted download outlived the interruption by whatever was left of it:
+    // the user hit stop, the file stopped growing, and the card sat there for up
+    // to two more minutes because some *other* job in the same session was still
+    // running.
+    //
+    // `idleTicks` already answers exactly this question — it is reset by every
+    // sample that grows the file, and by a fresh aria2c sidecar, so a live
+    // transfer keeps it at 0 while a stopped one reaches the threshold in three
+    // seconds.
+    const moving = task.idleTicks < IDLE_TICKS_TO_CLOSE
+    const busyGrace = busy && (task.kind !== 'download' || moving)
 
     if (task.done && quiet && !busyGrace) {
       if (!task.expiresAt) task.expiresAt = now + LINGER_MS

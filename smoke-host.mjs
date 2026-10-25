@@ -14,6 +14,7 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { aria2InputSpec, classify, extractTargets } from './detect.js'
+import { tasks } from './state/registry.js'
 import { scriptPlan } from './script.js'
 import {
   IDLE_TICKS_TO_CLOSE,
@@ -1203,6 +1204,114 @@ try {
   }
 
   setTitleLookup(() => '')
+}
+
+/* ------------------------------------------------------------------ */
+/* 9. a foreground command must not surface as a background row        */
+/* ------------------------------------------------------------------ */
+
+{
+  // A shell tool registers its own job while it runs (that registry is how it
+  // streams output). The row must be recognised as foreground at registration,
+  // because by the time the command returns the active-tool table is already
+  // cleared — and a late re-check made the row pop up out of nowhere afterwards,
+  // then vanish. While a download was still up, that ghost also kept the session
+  // "busy" and the download card lived on for two more minutes after a stop.
+  resetBackground()
+  noteToolStart('s1', 'pwsh', { command: 'curl -o x.bin https://e.com/x' })
+  noteJobEvent({
+    type: 'registered',
+    job: { id: 'fg', kind: 'bash', label: 'curl', status: 'running', owner: 's1', startedAt: Date.now() },
+  })
+  assert.equal(backgroundSnapshot().length, 0, 'a foreground command is already in the transcript')
+
+  noteJobEvent({
+    type: 'settled',
+    job: { id: 'fg', kind: 'bash', label: 'curl', status: 'completed', owner: 's1', startedAt: Date.now(), finishedAt: Date.now() },
+  })
+  noteToolEnd('s1')
+  assert.equal(backgroundSnapshot().length, 0, 'and it must not appear once the call returned')
+  assert.equal(backgroundSnapshot(Date.now() + 60_000).length, 0, 'no ghost after the linger window either')
+
+  // A job that outlived its tool call is real background work and stays listed.
+  resetBackground()
+  noteJobEvent({
+    type: 'registered',
+    job: { id: 'bg', kind: 'bash', label: 'detached', status: 'running', owner: 's2', startedAt: Date.now() },
+  })
+  assert.equal(backgroundSnapshot().length, 1, 'a job with no shell call behind it is background')
+  resetBackground()
+  ok('background: a foreground command never surfaces as a row, a detached job does')
+}
+
+/* ------------------------------------------------------------------ */
+/* 10. an interrupted download stops earning the busy grace            */
+/* ------------------------------------------------------------------ */
+
+{
+  // The busy grace exists so a running background job keeps its download card
+  // alive past the tool call. It used to be a two-minute window measured from the
+  // last growth, so an interrupted download outlived the interruption by whatever
+  // was left of that window — the user hit stop and the bar sat there. The idle
+  // counter already answers "is it still moving", so that is what decides it now.
+  // Earlier sections leave live cards behind on purpose; this one measures
+  // retirement, so it starts from an empty table.
+  tasks.clear()
+  const dir = mkdtempSync(join(tmpdir(), 'dp-busy-'))
+  const file = join(dir, 'big.iso')
+  writeFileSync(file, Buffer.alloc(1000))
+  utimesSync(file, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000))
+
+  const interrupted = {
+    id: 'interrupted',
+    kind: 'download',
+    name: 'pwsh',
+    sessionId: 's3',
+    sessionTitle: '',
+    titleAt: 0,
+    label: 'big.iso',
+    startedAt: Date.now() - 90_000,
+    bytes: 1000,
+    total: 2000,
+    speed: 0,
+    phase: '',
+    log: '',
+    done: true,
+    targets: [file],
+    aria2: false,
+    clone: false,
+    bulk: false,
+    bulkSizes: null,
+    history: [],
+    idleTicks: IDLE_TICKS_TO_CLOSE,
+    freshTarget: true,
+    lastGrowthAt: 0,
+    expiresAt: 0,
+  }
+  // The session still reports a running job of its own: the grace must not apply
+  // to a download that has stopped growing.
+  const registered = beginTask({ callId: 'interrupted', name: 'pwsh' }, { kind: 'download', command: 'curl -o big.iso https://e.com/big.iso' }, dir)
+  Object.assign(registered, {
+    startedAt: interrupted.startedAt,
+    bytes: interrupted.bytes,
+    total: interrupted.total,
+    done: true,
+    targets: [file],
+    idleTicks: IDLE_TICKS_TO_CLOSE,
+    freshTarget: true,
+    lastGrowthAt: 0,
+  })
+
+  const visible = () => snapshot().length
+  assert.equal(visible(), 1, 'the card starts out visible')
+  let now = Date.now()
+  for (let tick = 0; tick < 30 && visible() > 0; tick += 1) {
+    now += 1000
+    sweep(now, () => true)
+  }
+  assert.equal(visible(), 0, 'an interrupted download retires within seconds, not two minutes')
+  rmSync(dir, { recursive: true, force: true })
+  ok('state: an interrupted download retires even while its session is busy')
 }
 
 console.log('\nHOST SMOKE OK — utils, detect and state behave as documented')

@@ -6,33 +6,26 @@
  * lives in background.js.
  */
 import { activeTools } from './tables.js'
-import {
-  CONDITIONAL_WAIT,
-  FOREGROUND_GRACE_MS,
-  SHELL_TOOLS,
-  WAIT_TOOLS,
-} from './tuning.js'
+import { CONDITIONAL_WAIT, WAIT_TOOLS } from './tuning.js'
 
 /**
- * Is this job actually the foreground command that is running right now?
+ * Is this job the foreground command that ran it?
  *
  * A foreground shell call holds the agent for as long as it runs, so it is
- * visible in the transcript already. Only a job that outlived its tool call is
- * background work. The test is "started while the owner's current shell call
- * was already in flight": a job that predates the call is genuinely detached,
- * which is what keeps a background job listed when the agent moves on to run a
- * foreground command.
+ * visible in the transcript already; listing it here would double-report every
+ * command the agent runs. Only a job that outlived its tool call is background
+ * work.
+ *
+ * The answer is read off the row, not recomputed. `noteJobEvent()` decides once,
+ * at registration, while the shell call that creates the registry entry is still
+ * in flight — see `startedUnderShell` for what went wrong when this test asked
+ * the live tool table instead.
  *
  * @param {object} row
  * @returns {boolean}
  */
 export function isForegroundJob(row) {
-  if (row.type !== 'job') return false
-  const owner = String(row.sessionId || '')
-  if (!owner) return false
-  const tool = activeTools.get(owner)
-  if (!tool || !SHELL_TOOLS.has(tool.name)) return false
-  return Number(row.startedAt) >= tool.since - FOREGROUND_GRACE_MS
+  return row.type === 'job' && row.foreground === true
 }
 
 /**

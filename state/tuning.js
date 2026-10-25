@@ -14,18 +14,6 @@ export const IDLE_TICKS_TO_CLOSE = 3
 /** How long a settled card stays on screen, so it does not vanish mid-read. */
 export const LINGER_MS = 1200
 
-/**
- * How long a download may go without growing and still be kept alive by a busy
- * session.
- *
- * `isSessionBusy` is per session, so one long background download used to keep
- * every finished card in that session on screen indefinitely — a dead card that
- * never went away. Two minutes covers aria2c's 60 s default save interval (its
- * byte count only steps once a minute) with room for a slow step, while a card
- * whose transfer really stopped falls out of the list.
- */
-export const BUSY_GRACE_MS = 120_000
-
 /** Sample points kept for the speed window. Six ≈ 5 s of history at 1 Hz. */
 export const SPEED_WINDOW = 6
 
