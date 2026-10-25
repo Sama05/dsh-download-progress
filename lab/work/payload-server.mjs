@@ -22,6 +22,13 @@ const server = createServer((req, res) => {
     'content-length': String(total),
     'accept-ranges': 'bytes',
   })
+  // A HEAD carries the same headers and no body: answering it with the pump
+  // below would stream 40 MB into a socket nobody reads, so the plugin's
+  // denominator probe would time out and the card would stay indeterminate.
+  if (req.method === 'HEAD') {
+    res.end()
+    return
+  }
   const buf = Buffer.alloc(chunk, 0x41)
   let sent = 0
   let closed = false

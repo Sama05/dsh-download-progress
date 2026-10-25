@@ -7,7 +7,7 @@
  */
 
 import { basename } from 'node:path'
-import { extractTargets, remoteFileName, runsAria2, runsGitClone, transferIsStaged } from '../detect.js'
+import { commandSegments, extractTargets, remoteFileName, runsAria2, runsGitClone, transferIsStaged } from '../detect.js'
 import { scriptPlan } from '../script.js'
 import { clip, extractUrl, firstLine, text } from '../utils.js'
 import { readAria2Bulk } from './aria2.js'
@@ -43,7 +43,10 @@ export function expandPlan(plan, cwd) {
   // BITS stages every byte in a `BITxxxx.tmp` beside the destination and renames
   // it at the very end, so the destination never grows and no rate can be read
   // off it. The card shows elapsed time instead of a bar that would sit at 0 %.
-  const staged = transferIsStaged(command)
+  // Read per segment: a real dispatch is a script (`Remove-Item` … `Start-
+  // BitsTransfer` … `Write-Host`), and asking the whole string would compare the
+  // *first* line's program against the registry and answer "no" every time.
+  const staged = commandSegments(command).some(transferIsStaged)
   // `aria2c -i list.txt` names every real target inside the list file, so the
   // command line alone yields no target and the card used to sit on "载入中" for
   // the whole batch. Read the manifest and treat the batch as one transfer.

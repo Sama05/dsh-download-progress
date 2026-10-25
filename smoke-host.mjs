@@ -645,6 +645,28 @@ try {
   )
   staged.done = true
   assert.equal(staged.staged, true, 'a BITS transfer is marked staged')
+
+  // A real dispatch is a script, not one line: the agent writes a `Remove-Item`,
+  // then the transfer, then a `Get-Item`. Reading the staged flag off the whole
+  // command string compared the *first* line's program against the registry and
+  // found nothing, so a genuine BITS transfer was announced as staged=false and
+  // the card drew a 0 % bar for the entire transfer. The flag has to be read per
+  // segment, the way every other recognition decision is.
+  const stagedScript = beginTask(
+    { callId: 'call-staged-script', name: 'pwsh', agent: { id: 'sess-staged' } },
+    {
+      kind: 'download',
+      command:
+        "Remove-Item 'D:\\Downloads\\b.iso' -ErrorAction SilentlyContinue\n" +
+        "Start-BitsTransfer -Source 'https://x/b.iso' -Destination 'D:\\Downloads\\b.iso'\n" +
+        "Write-Host done",
+    },
+    'D:\\Downloads',
+  )
+  stagedScript.done = true
+  assert.equal(stagedScript.staged, true, 'a BITS transfer inside a multi-line script is still staged')
+  assert.equal(stagedScript.targets[0], 'D:\\Downloads\\b.iso', 'and its destination is still the target')
+  tasks.delete('call-staged-script')
   assert.equal(snapshot()[0].staged, true, 'the staged flag reaches the wire')
   staged.idleTicks = IDLE_TICKS_TO_CLOSE
   sweep(t0 + 60_000, (sessionId) => sessionId === 'sess-staged')
