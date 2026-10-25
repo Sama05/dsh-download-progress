@@ -514,6 +514,47 @@ async function settle() {
   // ten simultaneous downloads squash into hairlines instead of scrolling.
   if (!/\.ddp-card\{[^}]*flex:0 0 auto/.test(src))
     throw new Error('.ddp-card must opt out of flex shrinking')
+  // Every card paints a blurred backdrop and a running shine, so a layout change
+  // inside one card must not be allowed to reflow its neighbours. `contain` is
+  // what scopes it; the card already clips, so paint containment changes nothing
+  // visually.
+  if (!/\.ddp-card\{[^}]*contain:layout paint/.test(src))
+    throw new Error('.ddp-card must scope its own layout with `contain`')
+  // Keyframes run *forever* on cards that are on screen for minutes. Animating a
+  // layout property (left, margin-left, width, top…) makes the browser re-flow
+  // the whole list every frame; the compositor can only carry `transform` and
+  // `opacity` for free. This caught the shine and the indeterminate bar.
+  //
+  // The bodies are extracted by counting braces rather than by a lazy regex:
+  // a one-line `@keyframes x{0%{opacity:.35}}` would otherwise swallow every rule
+  // that follows it up to the next closing brace at column 0.
+  const keyframes = (text) => {
+    const out = []
+    const head = /@keyframes\s+([\w-]+)\s*\{/g
+    let m
+    while ((m = head.exec(text))) {
+      let depth = 0
+      let i = head.lastIndex - 1
+      for (; i < text.length; i += 1) {
+        if (text[i] === '{') depth += 1
+        else if (text[i] === '}') {
+          depth -= 1
+          if (depth === 0) break
+        }
+      }
+      out.push({ name: m[1], body: text.slice(head.lastIndex, i) })
+      head.lastIndex = i + 1
+    }
+    return out
+  }
+  const LAYOUT_KEYS = ['left', 'right', 'top', 'bottom', 'width', 'height', 'margin', 'padding']
+  for (const frame of keyframes(src)) {
+    const props = [...frame.body.matchAll(/(?:^|[{;])\s*([a-z-]+)\s*:/g)].map((m) => m[1])
+    for (const prop of props) {
+      if (LAYOUT_KEYS.some((k) => prop === k || prop.startsWith('margin-') || prop.startsWith('padding-')))
+        throw new Error('@keyframes ' + frame.name + ' animates `' + prop + '`; use transform instead')
+    }
+  }
   void style
   ok('css: the stylesheet is present with balanced braces, cards cannot be squashed')
 }

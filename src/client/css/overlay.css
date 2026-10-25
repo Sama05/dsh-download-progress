@@ -275,6 +275,11 @@
      scrolling: overflow:hidden on the card zeroes its automatic minimum size,
      which is exactly what lets flex squash it past its content. */
   flex:0 0 auto;
+  /* The card paints a blurred backdrop and a shine that animates forever, so
+     anything that changes inside one card must not be allowed to reflow the
+     others. layout + paint containment scopes both; the card already clips its
+     children, so paint containment changes nothing visually. */
+  contain:layout paint;
   position:relative;isolation:isolate;overflow:hidden;
   background:var(--ddp-card-bg,var(--dsw-alias-bg-overlay,rgba(32,32,36,.9)));
   /* With no theme override, tint the host colour down so the blur has something
@@ -355,9 +360,15 @@
   background:linear-gradient(90deg,transparent,rgba(255,255,255,.38),transparent);
   animation:ddp-shine 1.5s linear infinite;
 }
+/* Both of these run for as long as the card is on screen, so they must stay on
+   the compositor. Animating left / margin-left re-flows the list on every frame;
+   transform is the same motion for free. Percentages are relative to the
+   element's own width: the bar is 38 % of its parent and travels from -38 % to
+   100 % of it, i.e. -100 % to 263 % of itself; the shine keeps its left:-40% base
+   and travels 140 % of the parent, i.e. 350 % of itself. */
 .ddp-fill--indet{width:38%;animation:ddp-slide 1.15s ease-in-out infinite}
-@keyframes ddp-slide{0%{margin-left:-38%}100%{margin-left:100%}}
-@keyframes ddp-shine{0%{left:-40%}100%{left:100%}}
+@keyframes ddp-slide{0%{transform:translateX(-100%)}100%{transform:translateX(263%)}}
+@keyframes ddp-shine{0%{transform:translateX(0)}100%{transform:translateX(350%)}}
 .ddp-tip{
   position:absolute;right:0;bottom:calc(100% + 6px);
   padding:1px 6px;border-radius:5px;font-size:11px;
