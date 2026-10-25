@@ -239,6 +239,14 @@ assert.deepEqual(
 assert.deepEqual(extractTargets('certutil -urlcache -split -f https://x/a.iso "D:\\My ISOs\\a.iso"', CWD), [
   'D:\\My ISOs\\a.iso',
 ])
+// PowerShell binds named parameters in any order, so `-Destination` can come
+// before `-Source`. Reading the target off the last positional token broke
+// exactly this spelling: the trailing token is the URL, which is discarded as a
+// URL, leaving the card with no target and a permanent "载入中...".
+assert.deepEqual(
+  extractTargets('Start-BitsTransfer -Destination D:\\a.iso -Source https://x/a.iso', CWD),
+  ['D:\\a.iso'],
+)
 // Without `-Destination`, BITS derives the file name from the URL itself. There
 // is no path in the command, so guessing one would watch a file nothing writes:
 // the card stays unresolved instead.
@@ -513,6 +521,30 @@ ok('detect: extractTargets handles quotes, cwd, -O, clone, dedupe, variables')
     const plan = scriptPlan(command, dir)
     assert.deepEqual(plan.targets, ['D:\\ISO\\win22h2.iso'])
     assert.equal(plan.scriptPath, script)
+
+    // The same script may use a staged downloader. `staged` has to come from the
+    // script body too: the command line says `powershell -File x.ps1`, which
+    // names no downloader at all. Without this the card drew a 0 % bar for a
+    // transfer that never touches its destination until the very end.
+    const bitsScript = join(dir, 'get-iso-bits.ps1')
+    writeFileSync(
+      bitsScript,
+      [
+        'param($Url)',
+        "$out = 'D:\\ISO\\bits.iso'",
+        'Start-BitsTransfer -Source $Url -Destination $out',
+        '',
+      ].join('\n'),
+    )
+    const bitsCommand = `powershell -NoProfile -ExecutionPolicy Bypass -File "${bitsScript}"`
+    assert.equal(scriptPlan(bitsCommand, dir).staged, true, 'a staged downloader inside a -File script is detected')
+    const bitsTask = beginTask(
+      { callId: 'call-script-bits', name: 'pwsh', agent: { id: 'sess-script-bits' } },
+      classify({ name: 'pwsh', arguments: { command: bitsCommand } }),
+      dir,
+    )
+    assert.equal(bitsTask.staged, true, 'and the task carries the flag to the wire')
+    tasks.delete('call-script-bits')
 
     // A script that downloads nothing must not leave a card behind: it would sit
     // at 0 % forever, since there is no file to sample. `beginTask` therefore
@@ -1087,7 +1119,24 @@ ok('state: sample → speed window → linger → retire, plus install events')
   // Snapshot shape is the wire contract with the client. Every field the client
   // reads must be present for every kind.
   const shape = snapshot().find((t) => t.id === 'call-inst')
-  for (const key of ['id', 'kind', 'label', 'bytes', 'total', 'speed', 'phase', 'log', 'elapsedMs', 'done', 'staged', 'unresolved']) {
+  for (const key of [
+    'id',
+    'kind',
+    'name',
+    'label',
+    'sessionId',
+    'sessionTitle',
+    'bytes',
+    'total',
+    'speed',
+    'phase',
+    'log',
+    'startedAt',
+    'elapsedMs',
+    'done',
+    'staged',
+    'unresolved',
+  ]) {
     assert.ok(key in shape, 'snapshot must expose ' + key)
   }
   ok('state: snapshot exposes the full wire contract')

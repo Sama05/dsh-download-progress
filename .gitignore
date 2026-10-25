@@ -8,6 +8,10 @@ Thumbs.db
 # scratch space for manual experiments (probe scripts, downloaded fixtures)
 dev/
 
+# `node bench.mjs --after` writes the comparison run here, to read next to
+# `baseline.json`. It is a measurement, not a source file.
+bench/after.json
+
 # lab experiment outputs (downloads stay out of git, the fixture scripts stay in).
 # `lab/work/` itself must not be excluded — git cannot re-include a file whose
 # parent directory is excluded, so the ignore is on the directory's contents.

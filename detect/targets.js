@@ -115,7 +115,10 @@ export function extractTargets(command, cwd) {
   for (const segment of segments) {
     const entry = transferOf(segment)
     if (!entry || entry.dir) continue
-    for (const value of flagValues(source, entry.out)) push(value)
+    // `undefined` must not reach `flagValues`: `matchAll(undefined)` is a
+    // zero-width match that runs once per character, so a row without an `out`
+    // flag (bits, certutil) spent twenty thousand iterations doing nothing.
+    for (const value of entry.out ? flagValues(source, entry.out) : []) push(value)
     // `-O` / `--remote-name`: the name comes from the URL, which is the only way
     // to know the target before the transfer starts. Per row, because the same
     // letter means the opposite thing to curl and to wget.
@@ -123,8 +126,10 @@ export function extractTargets(command, cwd) {
       const remote = remoteFileName(source)
       if (remote) push(remote)
     }
-    // `certutil -urlcache -split -f <url> <path>`: the destination is the last
-    // positional argument, not a named flag.
+    // `certutil -urlcache -split -f <url> <path>`, and `Start-BitsTransfer <url>
+    // <path>`: the destination can be the last positional argument instead of a
+    // named flag. `push` drops a URL, so when the last token *is* the source the
+    // position form contributes nothing and only the flag form counts.
     if (entry.last) push(lastPositional(segment))
   }
 

@@ -1084,7 +1084,7 @@ setInterval(async () => {
 | 最大源文件 | `client.js` 2611 行 | `src/client/90-overlay.js` **335 行**（`client.js` 是拼接产物） |
 | 次大源文件 | `state.js` 1219 行 | `src/client/85-inline.js` 322 行 |
 | Host 侧最大文件 | `detect.js` 929 行 | `state/probes.js` 212 行 |
-| 源文件总数 | 15 | 58 个 js/css（另有 4 个测试脚本、`lab/` 不计） |
+| 源文件总数 | 15 | 70 个 js/css（另有 10 个测试脚本、`lab/` 不计） |
 | 循环依赖 | 未校验 | **0**（分层 import，每层只 import 上层） |
 | barrel 风险 | — | 四个 barrel 只做 re-export，**不含逻辑**，所以不会引入「barrel 导致 tree-shaking 失效 / 隐式循环」那两个经典问题 |
 
@@ -1145,7 +1145,8 @@ plan/aria2.js    原 state/aria2.js 整体搬过来
 ```
 
 `state/begin.js` 的 download 分支从 40 行塌成 15 行：`expandPlan` → 赋值 → retarget
-→ label/log → 探针。它现在只 import `PKG_RE`（一个纯正则）与 `expandPlan`。
+→ label/log → 探针。它现在只剩五个 import：`PKG_RE`（一个纯正则）、`expandPlan`、
+`utils` 里的 `clip/firstLine/text`、`probes` 里的两个探针、`registry` 里的三个符号。
 
 **注意**：`state.js` 里有 `export { expandPlan } from './plan.js'`，必须从 barrel 转出。
 写成 `'./plan/expand.js'` 会让 `architecture.mjs` 判违规，而且曾真的触发过
@@ -1153,16 +1154,21 @@ plan/aria2.js    原 state/aria2.js 整体搬过来
 
 #### 8.6.2 `architecture.mjs`：把分层规则变成测试
 
-新文件，约 190 行，纯 Node。一张 `ALLOWED` 表写死每层能 import 谁：
+新文件，约 200 行，纯 Node。一张 `ALLOWED` 表写死每层能 import 谁：
 
 ```
 utils      -> 无
 script     -> utils.js, script.js, script/
-detect     -> utils.js, script.js, detect.js, detect/, script/
-plan       -> utils.js, detect.js, script.js, plan.js, plan/
-state      -> utils.js, detect.js, plan.js, plan/, state.js, state/
+detect     -> utils.js, detect.js, detect/
+plan       -> utils.js, detect.js, script.js, plan/
+state      -> utils.js, detect.js, plan.js, plan/, state/
 background -> utils.js, background.js, background/
 ```
+
+每层只列**别人的** barrel：自己的 barrel 不在允许清单里（`state/x.js` import
+`state.js` 就是绕一圈拿私有名字，而且与 re-export 构成环）。`index.js`、`utils.js`、
+`client.js` 在 `EXEMPT` 表里逐条写明豁免理由；`unclassified()` 会点名任何既不属于某层、
+又没被豁免的顶层 `.js`，所以新加一个根目录模块不会悄悄逃出检查。
 
 扫 `from '...'` / `import '...'`，用 `posix.normalize(join(dirname(rel), spec))` 解析到
 包根再比前缀。违规就打印该层的允许清单并 exit 1。已接在 `npm test` 第二位。
@@ -1179,9 +1185,9 @@ skill 里没人执行。现在越界的那一行会当场变红。
 TRANSFERS = [
   { id: 'curl',  heads: {curl},  out: CURL_OUTFILE_RE, remoteName: CURL_REMOTE_NAME_RE, upload: CURL_UPLOAD_RE },
   { id: 'wget',  heads: {wget},  out: WGET_OUTFILE_RE },
-  { id: 'aria2c', heads: {aria2c}, out: ARIA_OUTFILE_RE, dir: ARIA_DIR_RE, input: ARIA_INPUT_RE },
+  { id: 'aria2c', heads: {aria2c}, out: ARIA_OUTFILE_RE, dir: ARIA_DIR_RE },
   { id: 'iwr',   heads: {invoke-webrequest, iwr}, out: PS_OUTFILE_ARG_RE, needsOut: true },
-  { id: 'bits',  heads: {start-bitstransfer}, staged: true, last: true },
+  { id: 'bits',  heads: {start-bitstransfer}, out: PS_DESTINATION_RE, staged: true, last: true },
   { id: 'certutil', heads: {certutil}, action: CERTUTIL_URL_RE, last: true },
 ]
 ```
@@ -1190,6 +1196,15 @@ TRANSFERS = [
 `needsOut`（iwr 必须带 `-OutFile`）。`classify` 与 `targets` 都改走这张表。
 
 **加一个新下载器现在只改 `spec.js` 一处**：加一行 + 一条 `ok(...)` 断言。
+
+`bits` 行同时有 `out` 和 `last`，因为 PowerShell 两种写法都合法：命名参数
+`-Destination x`（`-Source` 前后都行）与位置参数 `Start-BitsTransfer <url> <path>`。
+只读位置参数会漏掉前者 —— 反序时末尾的 token 是 URL，被当 URL 丢掉，卡片变成
+「载入中」；只读命名参数会漏掉后者。`lastPositional()` 用引号感知分词，所以
+`'D:\My ISOs\a.iso'` 不会被空格切开。
+
+**没有 `input` 字段**：aria2c 的 `-i` 清单由 `detect/downloaders.js` 的
+`aria2InputSpec()` 自己解析，注册表里再存一份是死数据。
 
 #### 8.6.4 四类原来漏识别的写法（都有 RED 测试）
 
@@ -1203,6 +1218,20 @@ TRANSFERS = [
 `expandLauncher()` 的修法是加一步 `isCommandShaped(body)`：剥完之后必须以非引号开头、
 且至少两个 token 才当作命令，否则返回原段——这样 `$o = 'D:\out.bin'` 这类纯赋值
 仍然留在 `collectAssignments` 的视野里，`-o $o` 还能解析。
+
+复查又抓到四类，都已补 RED：
+
+| 写法 | 原来 | 为什么 |
+| --- | --- | --- |
+| `Start-BitsTransfer -Destination D:\a.iso -Source https://x/a.iso` | 出卡但目标为空 | 目标原来取「最后一个位置参数」；PS 命名参数不分先后，反序时末尾是 URL，被当 URL 丢掉 |
+| `powershell -File get.ps1`（脚本里写 BITS） | `staged=false` | `expandPlan` 只看命令行；`-File` 形态的命令行只有 powershell，脚本正文才是真相 |
+| `registry` 里没有 `out` 的行（bits/certutil） | 每段空转 2 万次 | `flagValues(source, undefined)` → `matchAll(undefined)` 是零宽匹配，逐字符命中 |
+| wire key 断言缺 `name/sessionId/sessionTitle/startedAt` | 漏测 | 断言是字段表的子集，少一个字段也全绿 |
+
+`staged` 现在有两个来源：命令行的 `commandSegments(command).some(transferIsStaged)`，与
+脚本正文的 `scriptPlan().staged`（`script/tuning.js` 的 `STAGED_PROGRAM_RE`）。后者是
+`detect/spec.js` 里 `staged: true` 的镜像——script 层不能 import detect，所以两边各有一处，
+加新 staged 下载器时要同时改这两处。
 
 #### 8.6.5 端到端提速：预热 + 400 ms 补拍
 

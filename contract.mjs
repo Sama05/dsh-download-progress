@@ -194,7 +194,6 @@ const ADAPTERS = new Set([
   'sessionKeyOf',
   'sessionNameOf',
   'briefOf',
-  'const:VIEWS',
 ])
 
 /**

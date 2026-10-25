@@ -31,12 +31,20 @@
  *               the wire shape, not the code.
  *
  * `index.js` (wiring) and `utils.js` (kernel) are exempt: the first sits above
- * every layer by definition, the second below every one of them.
+ * every layer by definition, the second below every one of them. So is
+ * `client.js`, which is a generated browser bundle with no ESM imports at all —
+ * the browser half is checked by `contract.mjs`, not by this file. The scope is
+ * therefore "the Host half's ESM graph", and the check at the bottom refuses to
+ * let a new top-level `.js` file slip past without being classified.
  *
  * The barrel rule is the load-bearing one. `state/begin.js` used to import
  * `detect/patterns.js` symbols directly, which meant a change to how targets are
  * parsed could silently alter how a card is born. Now the barrel is the seam: a
  * name is either exported there (public, promised) or it is not (private).
+ * Because the barrel is that seam, a layer's own barrel is not on its own
+ * allow-list: `state/x.js` importing `state.js` would be a cycle through the
+ * re-export, and every such import would be a private name reached the long way
+ * round.
  *
  * Run with `node architecture.mjs`; it is part of `npm test`.
  */
@@ -54,17 +62,29 @@ const HERE = dirname(fileURLToPath(import.meta.url))
  * here that a reviewer can read, and the failure message below quotes the
  * allow-list verbatim so the fix is obvious from the terminal.
  *
- * A bare `detect.js` is the barrel; `detect/` is its private interior. Listing
- * them separately is what makes "public surface only" expressible at all.
+ * `detect/` is a layer's private interior; the barrel `detect.js` is what other
+ * layers use.
  */
 const ALLOWED = {
   utils: [],
   script: ['utils.js', 'script.js', 'script/'],
-  detect: ['utils.js', 'script.js', 'detect.js', 'detect/', 'script/'],
-  plan: ['utils.js', 'detect.js', 'script.js', 'plan.js', 'plan/'],
-  state: ['utils.js', 'detect.js', 'plan.js', 'plan/', 'state.js', 'state/'],
+  detect: ['utils.js', 'detect.js', 'detect/'],
+  plan: ['utils.js', 'detect.js', 'script.js', 'plan/'],
+  state: ['utils.js', 'detect.js', 'plan.js', 'plan/', 'state/'],
   background: ['utils.js', 'background.js', 'background/'],
 }
+
+/**
+ * Top-level files this test deliberately does not scan, and why.
+ *
+ * Enumerated rather than matched so that a new one has to be added here — a
+ * silent exemption is how a boundary test rots into decoration.
+ */
+const EXEMPT = new Map([
+  ['index.js', 'wiring: sits above every layer by definition'],
+  ['utils.js', 'kernel: sits below every layer, imports nothing'],
+  ['client.js', 'generated browser bundle, no ESM imports (see contract.mjs)'],
+])
 
 /** Every file belonging to a checked layer, as package-root-relative paths. */
 function sourceFiles() {
@@ -104,6 +124,31 @@ function sourceFiles() {
 function layerOf(rel) {
   const name = rel.split('/')[0].replace(/\.js$/, '')
   return Object.prototype.hasOwnProperty.call(ALLOWED, name) ? name : null
+}
+
+/**
+ * Top-level `.js` files that are neither a layer nor explicitly exempt.
+ *
+ * The check exists because the failure mode of `Object.keys(ALLOWED)` is
+ * silence: a new `cache.js` at the root would simply never be scanned, and the
+ * test would keep printing "ok" while the rule stopped applying to new code.
+ *
+ * @returns {string[]}
+ */
+function unclassified() {
+  const out = []
+  for (const entry of readdirSync(HERE)) {
+    if (!entry.endsWith('.js')) continue
+    if (EXEMPT.has(entry)) continue
+    if (Object.prototype.hasOwnProperty.call(ALLOWED, entry.replace(/\.js$/, ''))) continue
+    try {
+      if (!statSync(join(HERE, entry)).isFile()) continue
+    } catch {
+      continue
+    }
+    out.push(entry)
+  }
+  return out.sort()
 }
 
 /**
@@ -153,6 +198,16 @@ for (const rel of files) {
 }
 
 console.log('\narchitecture')
+
+const stray = unclassified()
+if (stray.length) {
+  for (const name of stray) {
+    console.log(`  FAIL ${name} is a top-level module with no layer`)
+    console.log('       add it to ALLOWED, or to EXEMPT with the reason it is above/below every layer')
+  }
+  console.log(`\n  ${stray.length} unclassified module(s)`)
+  process.exit(1)
+}
 
 if (violations.length) {
   for (const v of violations) {

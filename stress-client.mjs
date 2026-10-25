@@ -56,7 +56,7 @@ function boot(options = {}) {
       if (at >= 0) list.splice(at, 1)
     },
     requestAnimationFrame: (fn) => {
-      timers.push(fn)
+      timers.push({ fn, ms: 0 })
       return timers.length
     },
     cancelAnimationFrame: () => {},
@@ -118,8 +118,11 @@ function boot(options = {}) {
       return intervals.length
     },
     clearInterval: () => {},
-    setTimeout: (fn) => {
-      timers.push(fn)
+    // The delay is recorded, not dropped. An assertion on `timers.length > n`
+    // alone could not tell the fast poll from an animation frame, and stayed
+    // green even with the cadence set to five seconds.
+    setTimeout: (fn, ms) => {
+      timers.push({ fn, ms })
       return timers.length
     },
     clearTimeout: () => {},
@@ -421,8 +424,8 @@ async function settle() {
   const before = app.timers.length
   app.render('shell.overlay')
   await settle()
-  if (app.timers.length <= before)
-    throw new Error('an active frame must schedule a faster follow-up poll')
+  const chase = app.timers.slice(before).find((timer) => timer.ms === 400)
+  if (!chase) throw new Error('an active frame must schedule a 400 ms follow-up poll')
   ok('poll: an active frame schedules a faster follow-up')
 }
 

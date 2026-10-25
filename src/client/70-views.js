@@ -7,36 +7,41 @@
      * `log: String(task.log || '')` and the same `elapsed + 's'`; adding a shape
      * meant touching four places. Now a shape is one entry, and anything a
      * builder does not return falls back to the shared values below.
+     *
+     * Builders read `ctx`, never `task`: `describe()` is the one place allowed to
+     * touch the wire shape (CONTRACT.md, "谁是 adapter"). A builder reaching for
+     * `task.staged` would be a second reader of the wire, and a field renamed on
+     * the host would then break two places instead of one.
      */
     const VIEWS = {
       /** Real bytes: size, optional total, optional rate. */
-      download(task, ctx) {
-        if (task.unresolved) return { name: '载入中...', meta: ctx.elapsed + 's' }
+      download(ctx) {
+        if (ctx.unresolved) return { name: '载入中...', meta: ctx.elapsed + 's' }
         // The downloader writes its bytes to a staging file and renames them onto
         // the target only at the end, so the target stays at 0 until the transfer
         // is over. A bar there would read 0 % for the whole download; the clock is
         // the only honest thing to show.
-        if (task.staged) return { name: task.label || '下载中...', meta: ctx.elapsed + 's' }
+        if (ctx.staged) return { name: ctx.label || '下载中...', meta: ctx.elapsed + 's' }
         // No byte has been counted yet. For aria2c that is the preallocation
         // window, which can last a while on a large file: its bitmap does not
         // exist yet, so the host deliberately reports nothing rather than the
         // preallocated size. Saying "0 B / 7 GiB · 0 B/s" there is a claim the
         // plugin cannot back up, and it reads as a stalled download.
-        if (ctx.preparing) return { name: task.label || '下载中...', meta: '准备中...' }
+        if (ctx.preparing) return { name: ctx.label || '下载中...', meta: '准备中...' }
         const size = ctx.hasTotal
           ? fmtBytes(ctx.bytes) + ' / ' + fmtBytes(ctx.total)
           : fmtBytes(ctx.bytes)
         const speed = ctx.showSpeed ? fmtSpeed(ctx.speed) : ''
         return {
-          name: task.label || '下载中...',
+          name: ctx.label || '下载中...',
           meta: speed ? size + ' · ' + speed : size,
         }
       },
       /** No byte stream at all: phase text plus elapsed time, newest log line. */
-      install(task, ctx) {
+      install(ctx) {
         return {
           name:
-            task.phase === 'applying' ? '插件安装中...应用配置中...' : '插件安装中...下载中...',
+            ctx.phase === 'applying' ? '插件安装中...应用配置中...' : '插件安装中...下载中...',
           meta: ctx.elapsed + 's',
         }
       },
@@ -46,10 +51,10 @@
        * The verb comes from the command, because "插件安装中" is wrong for `npm
        * install` and "下载中" is wrong for `docker pull`.
        */
-      pkg(task, ctx) {
+      pkg(ctx) {
         // `label` carries the matched verb from the host; the demo card has only
         // the raw command in `log`, so either is enough to pick the wording.
-        const command = String(task.label || task.log || '')
+        const command = String(ctx.label || ctx.log || '')
         const what = /docker|ollama/i.test(command)
           ? '拉取镜像中...'
           : /pip|uv\b/i.test(command)
@@ -58,17 +63,17 @@
         return { name: what, meta: ctx.elapsed + 's' }
       },
       /** A single page fetch: only a clock, because nothing is measurable. */
-      fetch(task, ctx) {
+      fetch(ctx) {
         return { name: '正在抓取网页中...' + ctx.elapsed + 's', meta: '' }
       },
       /** A search: the query is the only useful thing to show. */
-      search(task) {
-        return { name: '正在搜索「' + (task.label || '…') + '」中...请稍后', meta: '' }
+      search(ctx) {
+        return { name: '正在搜索「' + (ctx.label || '…') + '」中...请稍后', meta: '' }
       },
     }
 
     /** Unknown shape: still show a card, just without a claim about progress. */
-    function fallbackView(task, ctx) {
+    function fallbackView(ctx) {
       return { name: '载入中...', meta: ctx.elapsed + 's' }
     }
 
@@ -89,6 +94,14 @@
         total: Number(task.total),
         speed: Number(task.speed) || 0,
         elapsed: secs(task.elapsedMs),
+        // The rest of the wire fields the builders used to read straight off
+        // `task`. Copied, not proxied, so a builder cannot reach the object.
+        kind: String(task.kind || ''),
+        label: String(task.label || ''),
+        phase: String(task.phase || ''),
+        log: logOf(task),
+        unresolved: task.unresolved === true,
+        staged: task.staged === true,
       }
       ctx.hasTotal = Number.isFinite(ctx.total) && ctx.total > 0
       // Nothing measured yet and nothing moving: the transfer has not produced a
@@ -104,12 +117,12 @@
       // reaches here; one that died at zero retires within a few ticks.
       ctx.preparing = ctx.bytes === 0 && ctx.speed === 0
 
-      const build = VIEWS[task.kind] || fallbackView
-      const { name, meta } = build(task, ctx)
+      const build = VIEWS[ctx.kind] || fallbackView
+      const { name, meta } = build(ctx)
       // Only downloads have a meaningful fraction; everything else stays
       // indeterminate even if the host happened to report a total.
       const percent =
-        task.kind === 'download' && ctx.hasTotal
+        ctx.kind === 'download' && ctx.hasTotal
           ? clamp((ctx.bytes / ctx.total) * 100, 0, 100)
           : null
 
@@ -118,7 +131,7 @@
         meta,
         percent,
         determinate: percent !== null,
-        log: logOf(task),
+        log: ctx.log,
       }
     }
 

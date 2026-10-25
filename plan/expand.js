@@ -71,7 +71,9 @@ export function expandPlan(plan, cwd) {
   return {
     aria2,
     clone,
-    staged,
+    // Either source can name a staging downloader: the command line for
+    // `Start-BitsTransfer …` written inline, the script body for a `-File`.
+    staged: staged || Boolean(fromScript?.staged),
     bulk,
     targets,
     url,

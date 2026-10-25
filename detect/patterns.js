@@ -65,6 +65,17 @@ export const CURL_OUTFILE_RE = /(?:^|\s)(?:-o|--output|--output-document)[\s=]+(
  */
 export const PS_OUTFILE_ARG_RE = /(?:^|\s)-OutFile[\s:]+("([^"]+)"|'([^']+)'|(\S+))/gi
 
+/**
+ * `Start-BitsTransfer -Destination <path>`, same quoting rules.
+ *
+ * `-Destination` is a *named* parameter, so it can appear in any position —
+ * `-Destination` before `-Source` is as legal as the reverse. Reading the target
+ * as the trailing positional token therefore broke the reversed spelling: the
+ * last token is the URL, it is rejected as a URL, and the card ends up with no
+ * target at all.
+ */
+export const PS_DESTINATION_RE = /(?:^|\s)-Destination[\s:]+("([^"]+)"|'([^']+)'|(\S+))/gi
+
 /** `curl -O` / `--remote-name`: the target is `cwd/basename(url)`. */
 export const CURL_REMOTE_NAME_RE = /(?:^|\s)(?:-O|--remote-name)(?=\s|$)/
 
@@ -86,9 +97,6 @@ export const CURL_UPLOAD_RE = /(?:^|\s)(?:-T|--upload-file)(?=[\s=]|$)/
  * wget's `-O` means "write to this file", which is the *opposite* of curl's `-O`.
  * Treating the two the same used to put `wget -O out.bin …` on a card watching
  * the URL's own basename — a file the transfer never touches.
- *
- * The `--output-document=path` spelling is left alone on purpose: it is rare,
- * and a half-parsed flag would be worse than the honest "unresolved".
  */
 export const WGET_OUTFILE_RE = /(?:^|\s)(?:-O|--output-document)[\s=]+("([^"]+)"|'([^']+)'|(\S+))/g
 

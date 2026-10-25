@@ -1,5 +1,7 @@
 import { readScript } from './read.js'
 import { scriptTargets, scriptUrls } from './targets.js'
+import { stripComments } from './comments.js'
+import { STAGED_PROGRAM_RE } from './tuning.js'
 
 /**
  * Everything the host can learn from a `-File` command without running it.
@@ -12,7 +14,7 @@ import { scriptTargets, scriptUrls } from './targets.js'
  * @param {string} command the shell tool's command string
  * @param {string} [cwd] the agent working directory
  * @param {Record<string, string>} [env] defaults to `process.env`
- * @returns {{ scriptPath: string, targets: string[], urls: string[] } | null}
+ * @returns {{ scriptPath: string, targets: string[], urls: string[], staged: boolean } | null}
  */
 export function scriptPlan(command, cwd, env = process.env) {
   try {
@@ -23,7 +25,11 @@ export function scriptPlan(command, cwd, env = process.env) {
     // card anyway would put a permanent 0 % block on screen for, say, a script
     // that only prints something.
     if (targets.length === 0) return null
-    return { scriptPath: script.path, targets, urls: scriptUrls(script.body) }
+    // The command line is `powershell -File x.ps1`: it names no downloader, so
+    // the transfer registry only sees the shell. Whether the bytes land on the
+    // destination gradually or in one rename is decided inside the script.
+    const staged = STAGED_PROGRAM_RE.test(stripComments(script.body))
+    return { scriptPath: script.path, targets, urls: scriptUrls(script.body), staged }
   } catch {
     return null
   }

@@ -14,7 +14,6 @@
  *   `heads`     lower-case program names, as `headProgram()` reports them
  *   `out`       flag naming the output file (read with `flagValues`)
  *   `dir`       flag naming the directory `out` is relative to
- *   `input`     flag naming a batch manifest
  *   `remoteName`flag meaning "name the file after the URL"
  *   `upload`    flag meaning "these bytes travel the other way"
  *   `needsOut`  only interesting when `out` is present (see iwr)
@@ -25,11 +24,11 @@
 
 import {
   ARIA_DIR_RE,
-  ARIA_INPUT_RE,
   ARIA_OUTFILE_RE,
   CURL_OUTFILE_RE,
   CURL_REMOTE_NAME_RE,
   CURL_UPLOAD_RE,
+  PS_DESTINATION_RE,
   PS_OUTFILE_ARG_RE,
   WGET_OUTFILE_RE,
   headProgram,
@@ -46,9 +45,11 @@ const CERTUTIL_URL_RE = /(?:^|\s)-urlcache(?=\s|$)/i
  * into `-Destination` at the end (measured: the destination does not exist at
  * all until the transfer completes). There is therefore nothing to sample while
  * it runs, and a bar on the destination would sit at 0 % for the whole transfer.
- * It is registered with `staged` so the wire can say so, and with `last` because
- * the destination is the last positional — the target is still known, it is the
- * *growth* that cannot be watched.
+ * It is registered with `staged` so the wire can say so, and with both `out` and
+ * `last` because PowerShell accepts the destination either as the named
+ * `-Destination` flag (in any position) or positionally after `-Source`. Reading
+ * only the last positional broke `-Destination x -Source y` — the trailing token
+ * is the URL, which is discarded, leaving the card with no target at all.
  */
 export const TRANSFERS = [
   {
@@ -64,7 +65,6 @@ export const TRANSFERS = [
     heads: new Set(['aria2c']),
     out: ARIA_OUTFILE_RE,
     dir: ARIA_DIR_RE,
-    input: ARIA_INPUT_RE,
   },
   {
     id: 'iwr',
@@ -74,7 +74,13 @@ export const TRANSFERS = [
     // and a card would have nothing to watch.
     needsOut: true,
   },
-  { id: 'bits', heads: new Set(['start-bitstransfer']), staged: true, last: true },
+  {
+    id: 'bits',
+    heads: new Set(['start-bitstransfer']),
+    out: PS_DESTINATION_RE,
+    staged: true,
+    last: true,
+  },
   {
     id: 'certutil',
     heads: new Set(['certutil']),
