@@ -1358,6 +1358,11 @@ window.__ModuleLoader__.load({
       /** Real bytes: size, optional total, optional rate. */
       download(task, ctx) {
         if (task.unresolved) return { name: '载入中...', meta: ctx.elapsed + 's' }
+        // The downloader writes its bytes to a staging file and renames them onto
+        // the target only at the end, so the target stays at 0 until the transfer
+        // is over. A bar there would read 0 % for the whole download; the clock is
+        // the only honest thing to show.
+        if (task.staged) return { name: task.label || '下载中...', meta: ctx.elapsed + 's' }
         // No byte has been counted yet. For aria2c that is the preallocation
         // window, which can last a while on a large file: its bitmap does not
         // exist yet, so the host deliberately reports nothing rather than the
@@ -1774,9 +1779,10 @@ window.__ModuleLoader__.load({
       // not 0% — it is not measuring yet — so it falls through to the ring.
       // Not gated on `done`: a background download is `done` from its first
       // tick while the job runs on (see the same note in `describe`).
-      const preparing = kind === 'download' && bytes === 0 && speed === 0
+      const staged = kind === 'download' && task.staged === true
+      const preparing = kind === 'download' && !staged && bytes === 0 && speed === 0
       const percent =
-        kind === 'download' && hasTotal && !task.unresolved && !preparing
+        kind === 'download' && hasTotal && !task.unresolved && !staged && !preparing
           ? clamp((bytes / total) * 100, 0, 100)
           : null
 

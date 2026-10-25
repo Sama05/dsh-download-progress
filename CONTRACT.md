@@ -54,6 +54,7 @@ index.js   路由 /download-progress/state      views               只吃 view-
 | `startedAt` | number | 开始时间（epoch ms） |
 | `elapsedMs` | number | 已耗时，Host 每帧现算 |
 | `done` | boolean | 工具调用已返回（文件可能仍在增长） |
+| `staged` | boolean | 下载器先写临时文件、结束时才改名到目标（`Start-BitsTransfer`）：目标不增长，UI 画已耗时而不是 0% 进度条 |
 | `unresolved` | boolean | 是下载但没解析出目标：UI 画不确定态，不画 `0 B / 0 B` |
 
 ## 谁是 adapter

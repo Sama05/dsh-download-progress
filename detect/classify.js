@@ -10,14 +10,11 @@ import { FETCH_TOOLS, SEARCH_TOOLS, SHELL_TOOLS } from './tools.js'
 import {
   MAX_SCAN_CHARS,
   PKG_RE,
-  PS_OUTFILE_RE,
   isGitClone,
-  runsCurlUpload,
-  runsDownloader,
-  runsInvokeWebRequest,
   runsScriptFile,
 } from './patterns.js'
 import { commandSegments } from './segments.js'
+import { transferOf, transferUploads } from './spec.js'
 
 /* ------------------------------------------------------------------ */
 /* Classification                                                      */
@@ -101,7 +98,8 @@ export function classify(exec) {
     command.length > MAX_SCAN_CHARS ? command.slice(0, MAX_SCAN_CHARS) : command
 
   // Invoke-WebRequest WITHOUT -OutFile buffers the page in memory: there is no
-  // file to sample, so it must not be mistaken for a download.
+  // file to sample, so it must not be mistaken for a download. That rule, like
+  // every other one about a specific program, lives in `spec.js`.
   //
   // Every test below runs on a *segment head*, never on the raw command line: a
   // downloader only counts when it is the thing being run. Testing the whole
@@ -114,22 +112,21 @@ export function classify(exec) {
   // that merely contains `pip install …` or `Invoke-WebRequest -OutFile …` is
   // not mistaken for one that runs it.
   const code = segments.join('\n')
-  // An upload is not a download, and a card for one can only lie: no file grows
-  // on this end. Exclusion is per *segment*, so a command that both uploads and
-  // downloads still gets its download card.
-  const runsDownload = segments.some(
-    (segment) => runsDownloader(segment) && !runsCurlUpload(segment),
+  // One table decides what counts as a transfer (`spec.js`). An upload is
+  // excluded per *segment*, so a command that both uploads and downloads still
+  // gets its download card: a card for the upload could only lie, since no file
+  // grows on this end.
+  const runsTransfer = segments.some(
+    (segment) => transferOf(segment) !== null && !transferUploads(segment),
   )
   const runsClone = segments.some(isGitClone)
-  const writesFile =
-    segments.some(runsInvokeWebRequest) && PS_OUTFILE_RE.test(code)
   const runsScript = segments.some(runsScriptFile)
-  if (runsDownload || runsClone || writesFile || runsScript) {
+  if (runsTransfer || runsClone || runsScript) {
     // `script` says "the destination is inside a file, not on this command line".
     // `beginTask()` then reads the script and drops the task outright when it
     // names no output path, so a `-File` that merely prints something never
     // leaves an empty card behind.
-    return { kind: 'download', command, script: runsScript && !runsDownload && !runsClone && !writesFile }
+    return { kind: 'download', command, script: runsScript && !runsTransfer && !runsClone }
   }
   if (PKG_RE.test(code)) return { kind: 'pkg', command }
 

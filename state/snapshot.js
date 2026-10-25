@@ -122,6 +122,10 @@ export function snapshot() {
       startedAt: task.startedAt,
       elapsedMs: Math.max(0, now - task.startedAt),
       done: task.done,
+      // The downloader writes its bytes somewhere else and renames them onto the
+      // target at the end, so the target never grows. The client shows elapsed
+      // time instead of a bar that could only ever read 0 %.
+      staged: task.staged === true,
       // A download whose target could not be parsed: the client shows an
       // indeterminate "载入中..." bar instead of a fake 0 B / 0 B.
       unresolved: task.kind === 'download' && task.targets.length === 0,

@@ -55,6 +55,11 @@ export function beginTask(exec, plan, cwd) {
     // directory's `stat().size` is always 0 on Windows, so the sampler sums the
     // files underneath it instead of reading the target itself.
     clone: false,
+    // Set when the downloader stages its bytes somewhere else and only renames
+    // them onto the destination at the very end (`Start-BitsTransfer`). The
+    // destination then never grows, so there is no percentage to show and the
+    // sampler must not pretend the transfer is stalled.
+    staged: false,
     // Set when the command reads its targets from an aria2c input file: the
     // count is then a sum over many files, which has to be monotone because a
     // retried file legitimately truncates.
@@ -86,6 +91,7 @@ export function beginTask(exec, plan, cwd) {
     if (!expanded) return null
     task.aria2 = expanded.aria2
     task.clone = expanded.clone
+    task.staged = expanded.staged
     task.bulk = Boolean(expanded.bulk)
     task.targets = expanded.targets
     // A retry is the *same transfer*, not a second one. `curl -C - -o x.iso …`

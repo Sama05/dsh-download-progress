@@ -15,17 +15,16 @@ import {
   ARG_LIST_RE,
   ARIA_DIR_RE,
   ARIA_OUTFILE_RE,
-  CURL_OUTFILE_RE,
-  CURL_REMOTE_NAME_RE,
   GIT_CLONE_RE,
   OUTFILE_FLAGS,
-  PS_OUTFILE_ARG_RE,
-  WGET_OUTFILE_RE,
   flagValues,
-  headProgram,
   psArrayTokens,
 } from './patterns.js'
+import { lastPositional, transferOf } from './spec.js'
 import { decodeUrlName, remoteFileName } from './remote.js'
+
+/** Anything that names a remote resource rather than a path on this disk. */
+const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i
 
 /**
  * Output paths named inside a PowerShell `-ArgumentList`.
@@ -89,6 +88,10 @@ export function extractTargets(command, cwd) {
     // Still a variable, or something interpolated we cannot evaluate: a card on a
     // guessed path is worse than no card, because it silently watches nothing.
     if (/[$%]/.test(clean)) return
+    // A URL is not a path. `Start-BitsTransfer <url>` takes the source as its
+    // only positional and derives the file name itself, so the `last` row would
+    // otherwise produce `D:\work\https:\x\a.iso` — a path nothing will ever write.
+    if (URL_SCHEME_RE.test(clean)) return
     if (isAbsolute(clean)) {
       out.push(clean)
       return
@@ -99,34 +102,39 @@ export function extractTargets(command, cwd) {
     out.push(resolve(base, clean))
   }
 
-  // Which downloader is running decides which flag table applies. `-o` means
-  // "output file" to curl and aria2c, `-O` means the opposite in each, and
-  // aria2c's `-o` is relative to its own `-d`. Applying every table to every
-  // segment put two targets on one aria2c card — the cwd guess and the real one.
-  // Same head test as classify(): a downloader called by full path has to select
-  // the same flag table as a bare one, or the card appears and then watches the
-  // wrong file.
-  const heads = commandSegments(source).map(headProgram)
-  const hasCurl = heads.includes('curl')
-  const hasWget = heads.includes('wget')
-  const hasAria = heads.includes('aria2c')
-
-  if (hasCurl) for (const value of flagValues(source, CURL_OUTFILE_RE)) push(value)
-  for (const value of flagValues(source, PS_OUTFILE_ARG_RE)) push(value)
-  for (const value of argListTargets(source)) push(value)
-
-  if (hasWget) for (const value of flagValues(source, WGET_OUTFILE_RE)) push(value)
-
-  // `-O` takes the name from the URL, which is the only way to know the target
-  // before the transfer starts. curl only: see WGET_OUTFILE_RE above.
-  if (hasCurl && CURL_REMOTE_NAME_RE.test(source)) {
-    const remote = remoteFileName(source)
-    if (remote) push(remote)
+  // Which downloader is running decides which flag table applies. Those tables
+  // live in `spec.js` — one row per program — so a new downloader needs no edit
+  // here at all. Applying every table to every segment is what used to put two
+  // targets on one aria2c card: the cwd guess and the real one. Same head test as
+  // classify(): a downloader called by full path has to select the same flag
+  // table as a bare one, or the card appears and then watches the wrong file.
+  //
+  // Rows that own a directory flag are skipped on purpose: their `-o` is relative
+  // to `-d`, not to the cwd, and resolving it here would add the wrong guess
+  // alongside the right one. They are handled by their own block below.
+  for (const segment of segments) {
+    const entry = transferOf(segment)
+    if (!entry || entry.dir) continue
+    for (const value of flagValues(source, entry.out)) push(value)
+    // `-O` / `--remote-name`: the name comes from the URL, which is the only way
+    // to know the target before the transfer starts. Per row, because the same
+    // letter means the opposite thing to curl and to wget.
+    if (entry.remoteName && entry.remoteName.test(source)) {
+      const remote = remoteFileName(source)
+      if (remote) push(remote)
+    }
+    // `certutil -urlcache -split -f <url> <path>`: the destination is the last
+    // positional argument, not a named flag.
+    if (entry.last) push(lastPositional(segment))
   }
+
+  // A `-ArgumentList '-OutFile','x'` is a downloader launch written as data, so
+  // the row above cannot see it: the flags are string tokens, not a command line.
+  for (const value of argListTargets(source)) push(value)
 
   // aria2c: `-o` is relative to `-d` (default: the cwd), so the directory flag
   // has to be applied before the name means anything.
-  if (hasAria) {
+  if (segments.some((segment) => transferOf(segment)?.dir)) {
     const rawDir = unquote(resolveVar(flagValues(source, ARIA_DIR_RE)[0] || '', vars))
     // A directory we cannot resolve (`-d $out`, `-d "$base/x"`, or a relative
     // `-d` under a `cd` we could not follow) leaves the target ambiguous, so

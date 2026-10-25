@@ -75,7 +75,10 @@ export function sweep(now, isSessionBusy = null) {
     // transfer keeps it at 0 while a stopped one reaches the threshold in three
     // seconds.
     const moving = task.idleTicks < IDLE_TICKS_TO_CLOSE
-    const busyGrace = busy && (task.kind !== 'download' || moving)
+    // A staged downloader (BITS) never grows its target while it runs, so it can
+    // never look "moving". It is kept alive the way an install card is: by the
+    // background job that owns it still being alive.
+    const busyGrace = busy && (task.kind !== 'download' || moving || task.staged === true)
 
     if (task.done && quiet && !busyGrace) {
       if (!task.expiresAt) task.expiresAt = now + LINGER_MS

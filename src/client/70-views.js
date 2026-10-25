@@ -12,6 +12,11 @@
       /** Real bytes: size, optional total, optional rate. */
       download(task, ctx) {
         if (task.unresolved) return { name: '载入中...', meta: ctx.elapsed + 's' }
+        // The downloader writes its bytes to a staging file and renames them onto
+        // the target only at the end, so the target stays at 0 until the transfer
+        // is over. A bar there would read 0 % for the whole download; the clock is
+        // the only honest thing to show.
+        if (task.staged) return { name: task.label || '下载中...', meta: ctx.elapsed + 's' }
         // No byte has been counted yet. For aria2c that is the preallocation
         // window, which can last a while on a large file: its bitmap does not
         // exist yet, so the host deliberately reports nothing rather than the

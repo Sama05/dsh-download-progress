@@ -30,6 +30,40 @@ const INLINE_SHELL_RE =
 const INLINE_FLAG_RE = /(?:^|\s)(?:-c|-Command|--command|\/c)(?=\s|$)/i
 
 /**
+ * Drop the wrappers that sit in front of the program being invoked.
+ *
+ * Two forms reach the tools with a prefix that is not the program:
+ *
+ *   `$r = Invoke-WebRequest … -OutFile x`   PowerShell captures the response
+ *   `FOO=1 curl -o x y`                     bash sets an environment variable
+ *
+ * Without this the head reads `$r` or `FOO=1`, no downloader is ever matched,
+ * and the card silently does not appear — the most common way these commands are
+ * written by an agent. Stripping is idempotent, so callers may pass either form.
+ *
+ * `$o = 'D:\out.bin'` on its own also becomes `'D:\out.bin'`, which is not a
+ * command at all. `expandLauncher` therefore keeps the original in that case:
+ * dropping it would make the assignment invisible to target resolution, and
+ * `curl -o $o …` two lines later would then be watched on no path at all.
+ *
+ * @param {string} segment
+ * @returns {string}
+ */
+function stripPrefixes(segment) {
+  let out = segment.replace(
+    /^\s*(?:\[[^\]]+\]\s*)?\$[\w:]+(?:\.\w+)?\s*=\s*/,
+    '',
+  )
+  // `FOO=1 BAR=2 curl …` is legal, so the env prefix repeats.
+  for (;;) {
+    const next = out.replace(/^\s*[A-Za-z_][A-Za-z0-9_]*=\S*\s+/, '')
+    if (next === out) break
+    out = next
+  }
+  return out.trim()
+}
+
+/**
  * Rewrite a `Start-Process` launch into the command it actually runs.
  *
  * `Start-Process -FilePath aria2c.exe -ArgumentList '-x','16','-o','w.iso',url`
@@ -46,11 +80,15 @@ const INLINE_FLAG_RE = /(?:^|\s)(?:-c|-Command|--command|\/c)(?=\s|$)/i
  * @returns {string} the effective command, or the segment unchanged
  */
 export function expandLauncher(segment) {
-  // `$p = Start-Process …` is the same launch with the process object captured.
-  // Without this strip the head reads `$p`, the program is never found, and the
-  // card silently does not appear for a very common form.
-  const body = segment.replace(/^\s*(?:\[[^\]]+\]\s*)?\$[\w:]+(?:\.\w+)?\s*=\s*/, '')
-  if (headProgram(body) !== 'start-process') return segment
+  const body = stripPrefixes(segment)
+  if (headProgram(body) !== 'start-process') {
+    // Only a prefix strip that leaves a real command behind counts. Stripping
+    // `$o = ` from `$o = 'D:\out.bin'` leaves a bare literal, which is a value
+    // and not an invocation; keeping the original keeps the assignment visible
+    // to `collectAssignments` so `-o $o` can still be resolved.
+    if (body === segment || !isCommandShaped(body)) return segment
+    return body
+  }
   const program = /(?:^|\s)-FilePath\s+("([^"]+)"|'([^']+)'|(\S+))/i.exec(body)
   const value = program && (program[2] || program[3] || program[4])
   if (!value || /[$%]/.test(value)) return segment
@@ -60,6 +98,20 @@ export function expandLauncher(segment) {
   // split would turn `C:\My Downloads` into two arguments.
   const argv = args.map((token) => (/\s/.test(token) ? `"${token}"` : token)).join(' ')
   return argv ? `${value} ${argv}` : value
+}
+
+/**
+ * Whether a prefix-stripped segment still looks like `<program> <argument>…`.
+ *
+ * A leading quote means the remainder is a string literal (`$x = 'D:\a.bin'`),
+ * and a single token leaves no argument for a program to act on.
+ *
+ * @param {string} body
+ * @returns {boolean}
+ */
+function isCommandShaped(body) {
+  if (!body || /^["']/.test(body)) return false
+  return body.split(/\s+/).filter(Boolean).length >= 2
 }
 
 /**

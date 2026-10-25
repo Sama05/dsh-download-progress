@@ -31,9 +31,10 @@
       // not 0% — it is not measuring yet — so it falls through to the ring.
       // Not gated on `done`: a background download is `done` from its first
       // tick while the job runs on (see the same note in `describe`).
-      const preparing = kind === 'download' && bytes === 0 && speed === 0
+      const staged = kind === 'download' && task.staged === true
+      const preparing = kind === 'download' && !staged && bytes === 0 && speed === 0
       const percent =
-        kind === 'download' && hasTotal && !task.unresolved && !preparing
+        kind === 'download' && hasTotal && !task.unresolved && !staged && !preparing
           ? clamp((bytes / total) * 100, 0, 100)
           : null
 

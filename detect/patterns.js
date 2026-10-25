@@ -53,11 +53,20 @@ export const MAX_SCAN_CHARS = 20000
  * `curl -o <path>` / `--output <path>` / `--output-document <path>`.
  * Lowercase `-o` only: uppercase `-O` means "name it after the URL", which is
  * handled separately.
+ *
+ * The separator is `[\s=]+`, not `\s+`: curl accepts `--output=<path>`, and
+ * reading only the space form classified the call as a download while extracting
+ * no target at all — a card that sits on "载入中..." for the whole transfer.
  */
-export const CURL_OUTFILE_RE = /(?:^|\s)(?:-o|--output|--output-document)\s+("([^"]+)"|'([^']+)'|(\S+))/g
+export const CURL_OUTFILE_RE = /(?:^|\s)(?:-o|--output|--output-document)[\s=]+("([^"]+)"|'([^']+)'|(\S+))/g
 
-/** PowerShell `-OutFile <path>`, same quoting rules. */
-export const PS_OUTFILE_ARG_RE = /(?:^|\s)-OutFile\s+("([^"]+)"|'([^']+)'|(\S+))/gi
+/**
+ * PowerShell `-OutFile <path>`, same quoting rules.
+ *
+ * `[\s:]+` because PowerShell also binds `-OutFile:<path>`; both spellings are
+ * legal and the colon form used to extract nothing.
+ */
+export const PS_OUTFILE_ARG_RE = /(?:^|\s)-OutFile[\s:]+("([^"]+)"|'([^']+)'|(\S+))/gi
 
 /** `curl -O` / `--remote-name`: the target is `cwd/basename(url)`. */
 export const CURL_REMOTE_NAME_RE = /(?:^|\s)(?:-O|--remote-name)(?=\s|$)/
@@ -84,7 +93,7 @@ export const CURL_UPLOAD_RE = /(?:^|\s)(?:-T|--upload-file)(?=[\s=]|$)/
  * The `--output-document=path` spelling is left alone on purpose: it is rare,
  * and a half-parsed flag would be worse than the honest "unresolved".
  */
-export const WGET_OUTFILE_RE = /(?:^|\s)(?:-O|--output-document)\s+("([^"]+)"|'([^']+)'|(\S+))/g
+export const WGET_OUTFILE_RE = /(?:^|\s)(?:-O|--output-document)[\s=]+("([^"]+)"|'([^']+)'|(\S+))/g
 
 /**
  * aria2c names its output with `-o <file>` *relative to the download directory*

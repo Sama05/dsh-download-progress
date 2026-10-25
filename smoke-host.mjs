@@ -164,6 +164,27 @@ assert.equal(
 // A quoted string that happens to look like a transfer stays inert even when the
 // rest of the line is real code.
 assert.equal(shell('Write-Host "curl -o f u"; Get-Date'), null)
+// A captured return value is not part of the program name. `$r = Invoke-WebRequest
+// …` is still an Invoke-WebRequest; reading the head as `$r` classified it as
+// nothing at all, so the transfer ran with no card.
+assert.equal(shell('$r = Invoke-WebRequest -Uri u -OutFile D:\\a.zip').kind, 'download')
+assert.equal(shell('$r = curl.exe -o D:\\a.bin https://x/y').kind, 'download')
+assert.equal(shell('$r=iwr https://x/a.zip -OutFile D:\\a.zip').kind, 'download')
+assert.equal(shell('FOO=1 curl -o a.bin https://x/y').kind, 'download')
+// …but an assignment on its own is not a command, so it raises no card.
+assert.equal(shell("$o = 'D:\\out.bin'"), null)
+assert.equal(shell('$env:FOO = "bar"'), null)
+// Windows has two more ways to fetch a file that a shell command actually uses.
+// Start-BitsTransfer stages into an unpredictable `BITxxxx.tmp` and only renames
+// onto `-Destination` at the end, so it cannot be sampled at all; certutil's write
+// shape is unverified here. Both are still transfers, and both are reported
+// without a target so the client draws the indeterminate bar instead of a 0 %
+// progress bar that never moves.
+assert.equal(shell('Start-BitsTransfer -Source https://x/a.iso -Destination D:\\a.iso').kind, 'download')
+assert.equal(shell('Start-BitsTransfer https://x/a.iso D:\\a.iso').kind, 'download')
+assert.equal(shell('certutil -urlcache -split -f https://x/a.iso D:\\a.iso').kind, 'download')
+// certutil does many other things; only the URL-cache download is a transfer.
+assert.equal(shell('certutil -hashfile D:\\a.iso SHA256'), null)
 // A non-shell tool is never inspected for a command line.
 assert.equal(classify({ name: 'read', arguments: { file_path: 'x' } }), null)
 ok('detect: classify covers download / install / pkg / search / fetch / ignore')
@@ -180,7 +201,36 @@ assert.deepEqual(extractTargets('curl -o "C:\\a b\\f.zip" https://x/f.zip', CWD)
 assert.deepEqual(extractTargets('curl --output out.bin https://x/y', CWD), [
   join('D:\\work', 'out.bin'),
 ])
-assert.deepEqual(extractTargets('wget -q --output-document=o.bin https://x/y', CWD), [])
+assert.deepEqual(extractTargets('wget -q --output-document=o.bin https://x/y', CWD), [
+  join('D:\\work', 'o.bin'),
+])
+// The `=` spelling is the documented form of a long option, not an oddity: both
+// curl and wget accept it, and dropping it left the card with no target, which
+// renders as "载入中..." for a transfer that is plainly writing a file.
+assert.deepEqual(extractTargets('curl --output=D:\\a.bin https://x/y', CWD), ['D:\\a.bin'])
+assert.deepEqual(extractTargets('curl --output-document=a.bin https://x/y', CWD), [
+  join('D:\\work', 'a.bin'),
+])
+// PowerShell binds `-Parameter:Value` as well as `-Parameter Value`, and the two
+// are interchangeable at the prompt.
+assert.deepEqual(extractTargets('Invoke-WebRequest -Uri u -OutFile:D:\\a.zip', CWD), [
+  'D:\\a.zip',
+])
+// Start-BitsTransfer and certutil take the destination as a positional argument.
+assert.deepEqual(
+  extractTargets('Start-BitsTransfer -Source https://x/a.iso -Destination D:\\a.iso', CWD),
+  ['D:\\a.iso'],
+)
+assert.deepEqual(extractTargets('Start-BitsTransfer https://x/a.iso D:\\a.iso', CWD), [
+  'D:\\a.iso',
+])
+assert.deepEqual(extractTargets('certutil -urlcache -split -f https://x/a.iso D:\\a.iso', CWD), [
+  'D:\\a.iso',
+])
+// Without `-Destination`, BITS derives the file name from the URL itself. There
+// is no path in the command, so guessing one would watch a file nothing writes:
+// the card stays unresolved instead.
+assert.deepEqual(extractTargets('Start-BitsTransfer https://x/a.iso', CWD), [])
 assert.deepEqual(extractTargets('Invoke-WebRequest -Uri u -OutFile .\\x.zip', CWD), [
   join('D:\\work', '.\\x.zip'),
 ].map((p) => p))
@@ -584,6 +634,25 @@ try {
   sweep(t0 + 400_000 + LINGER_MS)
   assert.equal(snapshot().length, 0, 'the moving card retires once it really stops')
 
+  // A staged downloader writes a temp file and renames it onto the target at the
+  // end, so the target never grows and `idleTicks` reaches the threshold within
+  // seconds of the start. It has to live as long as the job that owns it, or the
+  // card would vanish a few seconds into a transfer that is still running.
+  const staged = beginTask(
+    { callId: 'call-staged', name: 'pwsh', agent: { id: 'sess-staged' } },
+    { kind: 'download', command: 'Start-BitsTransfer https://x/a.iso D:\\Downloads\\a.iso' },
+    'D:\\Downloads',
+  )
+  staged.done = true
+  assert.equal(staged.staged, true, 'a BITS transfer is marked staged')
+  assert.equal(snapshot()[0].staged, true, 'the staged flag reaches the wire')
+  staged.idleTicks = IDLE_TICKS_TO_CLOSE
+  sweep(t0 + 60_000, (sessionId) => sessionId === 'sess-staged')
+  assert.equal(snapshot().length, 1, 'a staged transfer is held by its running job')
+  sweep(t0 + 61_000, (sessionId) => sessionId === 'sess-other')
+  sweep(t0 + 62_000 + LINGER_MS, (sessionId) => sessionId === 'sess-other')
+  assert.equal(snapshot().length, 0, 'once no job is left it retires like any other card')
+
   // A batch download whose HEAD probes never all answered carries no `total`.
   // A batch whose probes never all answered has no denominator, and the rate
   // projection used to extrapolate from the last measurement anyway — the card
@@ -942,7 +1011,7 @@ ok('state: sample → speed window → linger → retire, plus install events')
   // Snapshot shape is the wire contract with the client. Every field the client
   // reads must be present for every kind.
   const shape = snapshot().find((t) => t.id === 'call-inst')
-  for (const key of ['id', 'kind', 'label', 'bytes', 'total', 'speed', 'phase', 'log', 'elapsedMs', 'done', 'unresolved']) {
+  for (const key of ['id', 'kind', 'label', 'bytes', 'total', 'speed', 'phase', 'log', 'elapsedMs', 'done', 'staged', 'unresolved']) {
     assert.ok(key in shape, 'snapshot must expose ' + key)
   }
   ok('state: snapshot exposes the full wire contract')

@@ -10,6 +10,7 @@
  *
  *  tools.js        which tool names mean search / fetch / shell
  *  patterns.js     the flag regexes, the token readers, and the head-program tests
+ *  spec.js         the transfer catalogue: one row per program that writes a file
  *  segments.js     where one command ends and the next begins
  *  vars.js         plain assignments, and the cwd a command really runs in
  *  remote.js       the name a URL asks to be saved as
@@ -29,6 +30,7 @@
 export { FETCH_TOOLS, SEARCH_TOOLS, SHELL_TOOLS } from './detect/tools.js'
 export { GIT_CLONE_RE, PKG_RE, PS_OUTFILE_RE, PS_SCRIPT_FILE_RE } from './detect/patterns.js'
 export { commandSegments } from './detect/segments.js'
+export { transferIsStaged } from './detect/spec.js'
 export { commandWorkingDirectory } from './detect/vars.js'
 export { remoteFileName } from './detect/remote.js'
 export { extractTargets } from './detect/targets.js'
