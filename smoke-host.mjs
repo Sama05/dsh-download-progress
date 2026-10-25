@@ -826,6 +826,48 @@ try {
   ok('state: aria2c preallocation is read from the .aria2 bitmap, not stat()')
 }
 
+// Only aria2c writes a `.aria2` control file, and reading one costs an exception
+// on every tick for every target that does not have it. curl and wget never write
+// one, so a leftover sidecar beside their output says nothing about *their*
+// transfer: believing it would report a stranger's byte count, and probing for it
+// spent half the sampling budget on thirty ordinary cards.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'ddp-nosidecar-'))
+  const target = join(dir, 'c.bin')
+  const control = target + '.aria2'
+  const WRITTEN = 4096
+  const PIECE = 1024
+  const head = Buffer.alloc(2 + 4 + 4 + 4 + 8 + 8 + 4)
+  head.writeUInt16BE(1, 0)
+  head.writeUInt32BE(0, 2)
+  head.writeUInt32BE(0, 6)
+  head.writeUInt32BE(PIECE, 10)
+  head.writeBigUInt64BE(BigInt(WRITTEN), 14)
+  head.writeBigUInt64BE(0n, 22)
+  head.writeUInt32BE(1, 30)
+  const bitmap = Buffer.alloc(1)
+  bitmap[0] = 0x80 // one completed piece out of four
+
+  const curl = beginTask(
+    { callId: 'call-nosidecar', name: 'pwsh' },
+    { kind: 'download', command: `curl -o "${target}" https://e/c.bin` },
+    dir,
+  )
+  assert.equal(curl.aria2, false, 'a curl task is not an aria2c task')
+  const t0 = Date.now()
+  curl.startedAt = t0 - 10_000
+  writeFileSync(target, Buffer.alloc(WRITTEN))
+  writeFileSync(control, Buffer.concat([head, bitmap]))
+
+  sweep(t0)
+  assert.equal(curl.bytes, WRITTEN, 'a non-aria2c card must ignore a stray .aria2 sidecar')
+  assert.equal(snapshot().find((t) => t.id === 'call-nosidecar').bytes, WRITTEN)
+
+  rmSync(dir, { recursive: true, force: true })
+  tasks.delete('call-nosidecar')
+  ok('state: a non-aria2c card ignores .aria2 sidecars entirely')
+}
+
 // aria2c preallocates a target the moment it starts it, but only writes the
 // `.aria2` control file a moment later. In that gap `stat()` already reports the
 // final size, so a batch counted a file the instant it began and then dropped the

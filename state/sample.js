@@ -75,7 +75,13 @@ export function sample(task, now) {
         }
         continue
       }
-      const done = aria2Completed(target)
+      // Only aria2c writes a `.aria2` control file. Probing for one on every
+      // other downloader costs a thrown-and-caught ENOENT for every target on
+      // every tick — half the sampling budget on thirty ordinary cards — and a
+      // leftover sidecar beside a curl output describes a stranger's transfer,
+      // not this one. `task.aria2` comes from the command line and is already
+      // trusted for the preallocation rule below.
+      const done = task.aria2 ? aria2Completed(target) : undefined
       if (done !== undefined) {
         measured = true
         seenSidecars.add(target)
