@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-download-progress",
-  "version": "0.2.2",
+  "version": "0.2.4",
   "private": true,
   "description": "Frosted-glass download progress overlay for DeepSeek Harness (DSH)",
   "license": "MIT",
@@ -9,7 +9,12 @@
     "type": "git",
     "url": "https://github.com/Sama05/dsh-download-progress.git"
   },
-  "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "progress"],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "progress"
+  ],
   "type": "module",
   "exports": {
     ".": "./index.js",
@@ -26,7 +31,7 @@
     "build": "node scripts/build-client.mjs",
     "build:check": "node scripts/build-client.mjs --check",
     "prepublishOnly": "node scripts/build-client.mjs --check",
-    "test": "node scripts/build-client.mjs --check && node contract.mjs && node script.test.mjs && node smoke-boot.mjs && node smoke.mjs && node smoke-host.mjs && node stress-host.mjs && node stress-round2.mjs && node stress-client.mjs",
+    "test": "node scripts/build-client.mjs --check && node architecture.mjs && node contract.mjs && node script.test.mjs && node smoke-boot.mjs && node smoke.mjs && node smoke-host.mjs && node stress-host.mjs && node stress-round2.mjs && node stress-client.mjs",
     "contract": "node contract.mjs",
     "bench": "node bench.mjs"
   },
@@ -34,6 +39,8 @@
     "index.js",
     "utils.js",
     "detect.js",
+    "plan.js",
+    "plan/",
     "detect/",
     "state.js",
     "state/",
@@ -49,7 +56,9 @@
     "CONTRACT.md"
   ],
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "immediately": true,

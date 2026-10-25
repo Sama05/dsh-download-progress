@@ -11,20 +11,24 @@
  *
  *  tuning.js    every duration and cap, each with the bug that set it
  *  registry.js  the task map, and the handles everything else reads it through
- *  aria2.js     the `-i` manifest: reading it, resolving it to real paths
  *  probes.js    HEAD probes that supply the denominator
  *  disk.js      bytes really on disk (aria2c bitmap, git clone tree)
- *  begin.js     one dispatch -> one card
+ *  begin.js     one plan -> one card
  *  sample.js    one tick: measure the target, derive a rate
  *  sweep.js     retire finished cards; install events
  *  snapshot.js  the wire shape the Client polls
+ *
+ * This folder may import `detect.js` (the public barrel) and nothing inside
+ * `detect/` or `script/` — see `architecture.mjs`. Everything it needs to know
+ * about a command has already been resolved into a plan by `plan/expand.js`,
+ * which is re-exported below because the manifest reader moved there with it.
  *
  * This file re-exports the public surface, so every caller keeps importing
  * `./state.js`.
  */
 export { BUILD_TAG, setTitleResolver } from './state/registry.js'
 export { IDLE_TICKS_TO_CLOSE, LINGER_MS } from './state/tuning.js'
-export { parseAria2Input, readAria2Bulk } from './state/aria2.js'
+export { expandPlan, parseAria2Input, readAria2Bulk } from './plan.js'
 export { aria2Completed } from './state/disk.js'
 export { beginTask } from './state/begin.js'
 export { sweep, noteInstallLog, noteInstallPhase } from './state/sweep.js'

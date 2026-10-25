@@ -16,6 +16,15 @@
  *  targets.js      the paths a command will write to
  *  downloaders.js  aria2c and git, the two non-flag-shaped downloaders
  *  classify.js     the decision itself
+ *
+ * What this barrel is FOR: a boundary. `state/` (the card layer) may import this
+ * file and nothing inside `detect/`, which is what stops a new downloader's
+ * syntax from reaching into bookkeeping. `architecture.mjs` enforces it. Anything
+ * exported here is a promise; anything not exported is private to the folder.
+ *
+ * `plan/expand.js` sits above this barrel and below `state/`: it combines what
+ * `classify()` decided with what `script.js` can read out of a `-File` script, so
+ * the card layer receives concrete paths and never parses a command itself.
  */
 export { FETCH_TOOLS, SEARCH_TOOLS, SHELL_TOOLS } from './detect/tools.js'
 export { GIT_CLONE_RE, PKG_RE, PS_OUTFILE_RE, PS_SCRIPT_FILE_RE } from './detect/patterns.js'
