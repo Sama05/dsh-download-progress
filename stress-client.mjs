@@ -103,6 +103,13 @@ function boot(options = {}) {
     },
   }
 
+  // Every request the bundle makes, so a test can tell "warmed before the first
+  // render" from "only fetched once a component mounted".
+  const fetchCalls = []
+  const respond =
+    fetchImpl ||
+    (() => Promise.resolve({ ok: true, json: async () => ({ tasks, background }) }))
+
   const sandbox = {
     window: fakeWindow,
     console,
@@ -116,9 +123,10 @@ function boot(options = {}) {
       return timers.length
     },
     clearTimeout: () => {},
-    fetch:
-      fetchImpl ||
-      (() => Promise.resolve({ ok: true, json: async () => ({ tasks, background }) })),
+    fetch: (...args) => {
+      fetchCalls.push(args[0])
+      return respond(...args)
+    },
   }
   sandbox.globalThis = sandbox
 
@@ -162,7 +170,7 @@ function boot(options = {}) {
     return { tree, hooks: React.__hooks }
   }
 
-  return { render, setCalls, storage, listeners, timers, intervals, cleanups, plugin }
+  return { render, setCalls, storage, listeners, timers, intervals, cleanups, plugin, fetchCalls }
 }
 
 function walk(node, out) {
@@ -376,6 +384,46 @@ async function settle() {
   if (app.intervals.length !== 1)
     throw new Error('both surfaces must share one poller, got ' + app.intervals.length + ' intervals')
   ok('poll: the overlay and the chip share a single poller')
+}
+
+/* ------------------------------------------------------------------ */
+/* 3e. the store warms up before the first surface mounts              */
+/* ------------------------------------------------------------------ */
+
+{
+  // Mount order is host's business. The overlay may appear several hundred
+  // milliseconds after the plugin loads, and every millisecond before the first
+  // frame lands renders an empty overlay. Warming the store at apply() time
+  // means the first render already has a frame to replay.
+  const app = boot({ tasks: [{ id: 'w1', kind: 'download', bytes: 1, total: 2 }] })
+  await settle()
+  if (app.fetchCalls.length === 0)
+    throw new Error('the store must fetch once while applying, before any surface mounts')
+  app.render('shell.overlay')
+  await settle()
+  if (app.fetchCalls.length < 2)
+    throw new Error('mounting must still poll, got ' + app.fetchCalls.length + ' requests')
+  ok('poll: the store warms up before the first surface mounts')
+}
+
+/* ------------------------------------------------------------------ */
+/* 3f. an active frame is chased faster than the idle cadence          */
+/* ------------------------------------------------------------------ */
+
+{
+  // A real transfer moves every few hundred milliseconds. Waiting the full
+  // idle second makes the bar visibly step, so an active frame schedules one
+  // short follow-up. The idle cadence stays as-is to keep an empty overlay
+  // from polling the host four times a second.
+  const app = boot({
+    tasks: [{ id: 'f1', kind: 'download', label: 'f.bin', bytes: 10, total: 100, speed: 5, elapsedMs: 50 }],
+  })
+  const before = app.timers.length
+  app.render('shell.overlay')
+  await settle()
+  if (app.timers.length <= before)
+    throw new Error('an active frame must schedule a faster follow-up poll')
+  ok('poll: an active frame schedules a faster follow-up')
 }
 
 /* ------------------------------------------------------------------ */

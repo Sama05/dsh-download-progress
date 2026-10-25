@@ -3,6 +3,12 @@
     return {
       inject: ['slots'],
       apply(ctx) {
+        // Fetch the first frame now instead of when the overlay happens to
+        // mount: the host decides when a slot renders, and every millisecond
+        // until then is an empty overlay. Skipped when the plugin is switched
+        // off, so an off plugin still makes no requests at all.
+        if (readSettings().enabled) taskStore.warm()
+
         ctx.effect(() => {
           if (typeof document === 'undefined') return undefined
           const existing = document.getElementById('dsh-download-progress-style')

@@ -23,6 +23,16 @@ window.__ModuleLoader__.load({
     const ROUTE = '/download-progress/state'
     const POLL_MS = 1000
     /**
+     * Cadence while a transfer is actually moving.
+     *
+     * The host samples its files once a second, so polling faster than that
+     * buys nothing while the list is empty — an idle overlay polling four
+     * times a second is pure cost. While something is running, though, a full
+     * second between frames makes the bar step visibly; chasing an active
+     * frame at this cadence keeps it smooth without changing the idle rate.
+     */
+    const POLL_FAST_MS = 400
+    /**
      * Highest `schemaVersion` this bundle has seen on the wire.
      *
      * Only a diagnostic: the store never refuses a frame because of it (an
@@ -391,7 +401,10 @@ window.__ModuleLoader__.load({
      trough reads through the bar instead of covering it with a flat block. */
   background:var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff));
   background:color-mix(in srgb, var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff)) 62%, transparent);
-  transition:width .45s linear;
+  /* Shorter than the fastest poll gap: at 400 ms a .45 s ease would still be
+     animating when the next width arrives, and the bar would lag forever
+     instead of settling. */
+  transition:width .28s linear;
 }
 .ddp-fill::after{
   content:"";position:absolute;top:0;left:-40%;width:40%;height:100%;
@@ -1208,8 +1221,23 @@ window.__ModuleLoader__.load({
       readers: new Set(),
       /** The one interval, or null while nobody is watching. */
       timer: null,
+      /** The queued fast follow-up, if one is armed. */
+      chase: null,
       /** Consecutive misses; any success resets it. */
       failures: 0,
+
+      /**
+       * True while the last frame carried a card worth watching closely.
+       *
+       * Deliberately dumb: any card at all, rather than "a card that is still
+       * running". Reading `done` here would mean the data layer inspecting the
+       * wire shape, which is exactly what `contract.mjs` forbids everywhere
+       * outside an adapter. A finished card lingers for 1.2 s, so the worst
+       * case this can cost is three extra requests after the work ended.
+       */
+      active() {
+        return this.frame.tasks.length > 0
+      },
 
       publish(next) {
         this.frame = next
@@ -1259,23 +1287,67 @@ window.__ModuleLoader__.load({
         }
       },
 
-      tick() {
+      /**
+       * Poll once.
+       *
+       * `quiet` marks a fetch made while nothing is on screen (the warm-up
+       * before the first mount). A miss there must not eat into the failure
+       * budget that decides when a *visible* frame goes stale — nothing was
+       * visible yet, so nothing can go stale.
+       *
+       * @param {boolean} [quiet]
+       */
+      tick(quiet = false) {
         if (typeof document !== 'undefined' && document.hidden) return
         fetch(stateUrl(), { cache: 'no-store' })
           .then((res) => (res && res.ok ? res.json() : null))
           .then((data) => {
             if (!data) {
               // Missing/!ok response: hold the frame, drop it after the ceiling.
-              this.miss()
+              if (!quiet) this.miss()
               return
             }
             this.failures = 0
             this.publish(this.adopt(data))
+            this.schedule()
           })
           .catch(() => {
             /* the host route is optional: stay silent when it is absent */
-            this.miss()
+            if (!quiet) this.miss()
           })
+      },
+
+      /**
+       * Arm one fast follow-up while a transfer is moving.
+       *
+       * The baseline interval never changes, so an idle overlay still polls
+       * once a second. A moving bar gets one extra frame in between: the host
+       * samples on its own second, and without this the bar would jump a whole
+       * second's worth of bytes at a time.
+       *
+       * Uses a timeout, not a second interval, so the "one poller" invariant
+       * still holds — and it only arms while readers exist, so a surface that
+       * went away does not keep the route warm.
+       */
+      schedule() {
+        if (this.chase !== null || this.timer === null) return
+        if (!this.active()) return
+        this.chase = setTimeout(() => {
+          this.chase = null
+          this.tick()
+        }, POLL_FAST_MS)
+      },
+
+      /**
+       * Fetch once at plugin start, before any surface mounts.
+       *
+       * The overlay is mounted by the host whenever it mounts; until then the
+       * store is empty and the first render would paint an empty list, wait a
+       * round trip, and only then show the card. Doing the first request here
+       * moves that round trip off the visible path.
+       */
+      warm() {
+        if (this.timer === null && this.chase === null) this.tick(true)
       },
 
       start() {
@@ -1288,6 +1360,10 @@ window.__ModuleLoader__.load({
         if (this.timer === null) return
         clearInterval(this.timer)
         this.timer = null
+        if (this.chase !== null) {
+          clearTimeout(this.chase)
+          this.chase = null
+        }
       },
 
       /**
@@ -2580,6 +2656,12 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots'],
       apply(ctx) {
+        // Fetch the first frame now instead of when the overlay happens to
+        // mount: the host decides when a slot renders, and every millisecond
+        // until then is an empty overlay. Skipped when the plugin is switched
+        // off, so an off plugin still makes no requests at all.
+        if (readSettings().enabled) taskStore.warm()
+
         ctx.effect(() => {
           if (typeof document === 'undefined') return undefined
           const existing = document.getElementById('dsh-download-progress-style')

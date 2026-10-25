@@ -38,8 +38,23 @@
       readers: new Set(),
       /** The one interval, or null while nobody is watching. */
       timer: null,
+      /** The queued fast follow-up, if one is armed. */
+      chase: null,
       /** Consecutive misses; any success resets it. */
       failures: 0,
+
+      /**
+       * True while the last frame carried a card worth watching closely.
+       *
+       * Deliberately dumb: any card at all, rather than "a card that is still
+       * running". Reading `done` here would mean the data layer inspecting the
+       * wire shape, which is exactly what `contract.mjs` forbids everywhere
+       * outside an adapter. A finished card lingers for 1.2 s, so the worst
+       * case this can cost is three extra requests after the work ended.
+       */
+      active() {
+        return this.frame.tasks.length > 0
+      },
 
       publish(next) {
         this.frame = next
@@ -89,23 +104,67 @@
         }
       },
 
-      tick() {
+      /**
+       * Poll once.
+       *
+       * `quiet` marks a fetch made while nothing is on screen (the warm-up
+       * before the first mount). A miss there must not eat into the failure
+       * budget that decides when a *visible* frame goes stale — nothing was
+       * visible yet, so nothing can go stale.
+       *
+       * @param {boolean} [quiet]
+       */
+      tick(quiet = false) {
         if (typeof document !== 'undefined' && document.hidden) return
         fetch(stateUrl(), { cache: 'no-store' })
           .then((res) => (res && res.ok ? res.json() : null))
           .then((data) => {
             if (!data) {
               // Missing/!ok response: hold the frame, drop it after the ceiling.
-              this.miss()
+              if (!quiet) this.miss()
               return
             }
             this.failures = 0
             this.publish(this.adopt(data))
+            this.schedule()
           })
           .catch(() => {
             /* the host route is optional: stay silent when it is absent */
-            this.miss()
+            if (!quiet) this.miss()
           })
+      },
+
+      /**
+       * Arm one fast follow-up while a transfer is moving.
+       *
+       * The baseline interval never changes, so an idle overlay still polls
+       * once a second. A moving bar gets one extra frame in between: the host
+       * samples on its own second, and without this the bar would jump a whole
+       * second's worth of bytes at a time.
+       *
+       * Uses a timeout, not a second interval, so the "one poller" invariant
+       * still holds — and it only arms while readers exist, so a surface that
+       * went away does not keep the route warm.
+       */
+      schedule() {
+        if (this.chase !== null || this.timer === null) return
+        if (!this.active()) return
+        this.chase = setTimeout(() => {
+          this.chase = null
+          this.tick()
+        }, POLL_FAST_MS)
+      },
+
+      /**
+       * Fetch once at plugin start, before any surface mounts.
+       *
+       * The overlay is mounted by the host whenever it mounts; until then the
+       * store is empty and the first render would paint an empty list, wait a
+       * round trip, and only then show the card. Doing the first request here
+       * moves that round trip off the visible path.
+       */
+      warm() {
+        if (this.timer === null && this.chase === null) this.tick(true)
       },
 
       start() {
@@ -118,6 +177,10 @@
         if (this.timer === null) return
         clearInterval(this.timer)
         this.timer = null
+        if (this.chase !== null) {
+          clearTimeout(this.chase)
+          this.chase = null
+        }
       },
 
       /**

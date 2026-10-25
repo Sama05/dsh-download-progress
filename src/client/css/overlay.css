@@ -345,7 +345,10 @@
      trough reads through the bar instead of covering it with a flat block. */
   background:var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff));
   background:color-mix(in srgb, var(--ddp-accent,var(--dsw-alias-brand-primary,#4c8dff)) 62%, transparent);
-  transition:width .45s linear;
+  /* Shorter than the fastest poll gap: at 400 ms a .45 s ease would still be
+     animating when the next width arrives, and the bar would lag forever
+     instead of settling. */
+  transition:width .28s linear;
 }
 .ddp-fill::after{
   content:"";position:absolute;top:0;left:-40%;width:40%;height:100%;

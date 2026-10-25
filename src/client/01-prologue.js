@@ -23,6 +23,16 @@ window.__ModuleLoader__.load({
     const ROUTE = '/download-progress/state'
     const POLL_MS = 1000
     /**
+     * Cadence while a transfer is actually moving.
+     *
+     * The host samples its files once a second, so polling faster than that
+     * buys nothing while the list is empty — an idle overlay polling four
+     * times a second is pure cost. While something is running, though, a full
+     * second between frames makes the bar step visibly; chasing an active
+     * frame at this cadence keeps it smooth without changing the idle rate.
+     */
+    const POLL_FAST_MS = 400
+    /**
      * Highest `schemaVersion` this bundle has seen on the wire.
      *
      * Only a diagnostic: the store never refuses a frame because of it (an
