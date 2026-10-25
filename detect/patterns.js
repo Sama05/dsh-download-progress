@@ -111,6 +111,21 @@ export const OUTFILE_FLAGS = new Set(['-o', '--output', '--output-document', '-o
 /** `-ArgumentList …` / `-Args …`: the array form hides the flag behind commas. */
 export const ARG_LIST_RE = /-(?:ArgumentList|Args)\s+/i
 
+/** Where the first token of a command line ends. */
+const HEAD_TOKEN_SPLIT_RE = /[\s,;&|)]/
+
+/** A path separator, POSIX or Windows. */
+const SEPARATOR_RE = /[\\/]/
+
+/** The Windows executable suffix, which program names never carry here. */
+const EXE_SUFFIX_RE = /\.exe$/i
+
+/** `git` as the head of a segment, with no wrapper command in front. */
+const GIT_HEAD_RE = /^(?:git|git\.exe)(?=$|[\s])/i
+
+/** The `clone` subcommand word, never a `--grep=clone` argument. */
+const GIT_CLONE_WORD_RE = /(?:^|\s)clone(?=\s|$)/i
+
 /**
  * Pull the path out of every match of a flag pattern.
  * Uses `matchAll` rather than a shared `.exec()` loop: a `/g` regex carries
@@ -148,4 +163,91 @@ export function psArrayTokens(value) {
     if (token !== undefined) tokens.push(token)
   }
   return tokens
+}
+
+/* ------------------------------------------------------------------ */
+/* Which program a segment runs                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The program a segment invokes, as a bare lower-case name.
+ *
+ * Downloaders are usually not on PATH, so the call arrives as a full path:
+ * `& 'D:\tools\aria2\aria2c.exe' …`, `C:\Windows\System32\curl.exe …`. Matching
+ * the head against `/^curl/` misses every one of those, and the card silently
+ * never appears. Taking the basename of the first token keeps the "is this the
+ * thing being run" test intact — `Get-Process "D:\x\aria2c.exe"` heads with
+ * `Get-Process` and stays rejected.
+ *
+ * @param {string} segment a segment from commandSegments()
+ * @returns {string} e.g. `aria2c`, or '' when the segment is empty
+ */
+export function headProgram(segment) {
+  const s = segment.trim()
+  if (!s) return ''
+  const token = s[0] === '"' || s[0] === "'" ? quotedToken(s) : s.split(HEAD_TOKEN_SPLIT_RE, 1)[0]
+  return basenameOf(token).replace(EXE_SUFFIX_RE, '').toLowerCase()
+}
+
+/** The text inside a leading quote pair, or everything after the quote. */
+function quotedToken(s) {
+  const end = s.indexOf(s[0], 1)
+  return end > 0 ? s.slice(1, end) : s.slice(1)
+}
+
+/** The last path segment, under either separator. */
+function basenameOf(token) {
+  return token.split(SEPARATOR_RE).pop() || ''
+}
+
+/** Programs that transfer bytes to a file; the head of a segment must be one. */
+export const DOWNLOADER_NAMES = new Set(['curl', 'wget', 'aria2c'])
+
+/** Shells that take `-File` to mean "run this script". */
+export const SCRIPT_HOSTS = new Set(['powershell', 'pwsh'])
+
+/** Treats a segment as a downloader invocation, honouring a full path. */
+export function runsDownloader(segment) {
+  return DOWNLOADER_NAMES.has(headProgram(segment))
+}
+
+/**
+ * Whether a segment is curl *sending* bytes instead of receiving them.
+ *
+ * The head test is what keeps `wget -T 60 -O out.bin <url>` — where `-T` is
+ * `--timeout` — from being mistaken for an upload.
+ *
+ * @param {string} segment
+ * @returns {boolean}
+ */
+export function runsCurlUpload(segment) {
+  return headProgram(segment) === 'curl' && CURL_UPLOAD_RE.test(segment)
+}
+
+/** `Invoke-WebRequest` (or `iwr`) at the head of its segment. */
+export function runsInvokeWebRequest(segment) {
+  const name = headProgram(segment)
+  return name === 'invoke-webrequest' || name === 'iwr'
+}
+
+/**
+ * `git clone`, allowing flags between the two words (`git -C dir clone …`).
+ *
+ * The `clone` word must follow whitespace, so `git log --grep=clone` stays a
+ * log command instead of being mistaken for a download.
+ *
+ * @param {string} segment
+ */
+export function isGitClone(segment) {
+  return GIT_HEAD_RE.test(segment) && GIT_CLONE_WORD_RE.test(segment)
+}
+
+/**
+ * Whether a segment runs a script file through a PowerShell host.
+ *
+ * @param {string} segment
+ * @returns {boolean}
+ */
+export function runsScriptFile(segment) {
+  return SCRIPT_HOSTS.has(headProgram(segment)) && PS_SCRIPT_FILE_RE.test(segment)
 }

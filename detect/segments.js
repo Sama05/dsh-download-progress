@@ -7,8 +7,7 @@
  */
 
 import { text } from '../utils.js'
-import { ARG_LIST_RE, psArrayTokens } from './patterns.js'
-import { headProgram } from './programs.js'
+import { ARG_LIST_RE, headProgram, psArrayTokens } from './patterns.js'
 
 /** Where one command ends and the next begins (outside quotes). */
 const SEGMENT_SPLIT_RE = /[;&|\n(){}`]/

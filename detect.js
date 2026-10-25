@@ -9,8 +9,7 @@
  * so the graph is acyclic and `import/no-cycle` has nothing to report):
  *
  *  tools.js        which tool names mean search / fetch / shell
- *  patterns.js     the flag regexes, and the two token readers built on them
- *  programs.js     "which program is this segment running?"
+ *  patterns.js     the flag regexes, the token readers, and the head-program tests
  *  segments.js     where one command ends and the next begins
  *  vars.js         plain assignments, and the cwd a command really runs in
  *  remote.js       the name a URL asks to be saved as

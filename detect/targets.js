@@ -11,7 +11,6 @@ import { basename, isAbsolute, resolve } from 'node:path'
 import { extractUrl, text, uniq, unquote } from '../utils.js'
 import { commandSegments } from './segments.js'
 import { collectAssignments, effectiveCwd, resolveVar } from './vars.js'
-import { headProgram } from './programs.js'
 import {
   ARG_LIST_RE,
   ARIA_DIR_RE,
@@ -23,6 +22,7 @@ import {
   PS_OUTFILE_ARG_RE,
   WGET_OUTFILE_RE,
   flagValues,
+  headProgram,
   psArrayTokens,
 } from './patterns.js'
 import { decodeUrlName, remoteFileName } from './remote.js'

@@ -9,9 +9,8 @@
 
 import { text, unquote } from '../utils.js'
 import { commandSegments } from './segments.js'
-import { headProgram, isGitClone } from './programs.js'
 import { collectAssignments, resolveVar } from './vars.js'
-import { ARIA_DIR_RE, ARIA_INPUT_RE, flagValues } from './patterns.js'
+import { ARIA_DIR_RE, ARIA_INPUT_RE, flagValues, headProgram, isGitClone } from './patterns.js'
 
 /**
  * Whether a command line runs aria2c, as opposed to merely mentioning it.

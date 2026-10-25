@@ -805,8 +805,7 @@ node smoke-host.mjs
 | `index.js` | Host 半入口：只做接线（订阅事件、起采样定时器、注册路由）。**最外层只此一个文件** |
 | `detect.js` | barrel：工具分类的公开面 |
 | `detect/tools.js` | 哪些工具名算搜索 / 抓取 / shell |
-| `detect/patterns.js` | 旗标正则，以及建在正则上的两个 token 读取器 |
-| `detect/programs.js` | 「这一段在跑哪个程序？」 |
+| `detect/patterns.js` | 旗标正则、建在正则上的两个 token 读取器，以及「这一段在跑哪个程序？」的程序名判定 |
 | `detect/segments.js` | 一条命令在哪结束、下一条在哪开始 |
 | `detect/vars.js` | 普通赋值，以及命令真正生效的 cwd |
 | `detect/remote.js` | URL 想被存成什么名字 |

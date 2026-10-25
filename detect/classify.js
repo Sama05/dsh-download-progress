@@ -7,15 +7,17 @@
 
 import { clip, text } from '../utils.js'
 import { FETCH_TOOLS, SEARCH_TOOLS, SHELL_TOOLS } from './tools.js'
-import { MAX_SCAN_CHARS, PKG_RE, PS_OUTFILE_RE } from './patterns.js'
-import { commandSegments } from './segments.js'
 import {
+  MAX_SCAN_CHARS,
+  PKG_RE,
+  PS_OUTFILE_RE,
   isGitClone,
   runsCurlUpload,
   runsDownloader,
   runsInvokeWebRequest,
   runsScriptFile,
-} from './programs.js'
+} from './patterns.js'
+import { commandSegments } from './segments.js'
 
 /* ------------------------------------------------------------------ */
 /* Classification                                                      */
