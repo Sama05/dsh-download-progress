@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-download-progress",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "private": true,
   "description": "Frosted-glass download progress overlay for DeepSeek Harness (DSH)",
   "license": "MIT",

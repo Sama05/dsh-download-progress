@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![AI-assisted](https://img.shields.io/badge/AI--assisted-DeepSeek-6e6ef7.svg)](#ai-开发声明)
 
-在 DeepSeek Harness（DSH）里跑任务时，agent 一开始下载或加载东西，窗口上方自动浮出一条进度条，带**已下载 / 总大小**、**实时速度**、**百分比**，每秒刷新一次。
+在 DeepSeek Harness（DSH）里跑任务时，agent 一开始下载或加载东西，窗口上方自动浮出一条进度条，带**已下载 / 总大小**、**实时速度**、**百分比**，空闲时每秒刷新、有任务在跑时 0.4 秒刷新一次。
 
 ---
 
@@ -103,12 +103,13 @@ plugin_manager action=remove_bundle target="@local/dsh-download-progress"
 
 | 命令 | 说明 |
 | --- | --- |
-| `curl -o <文件>` / `--output` / `--output-document` | 最常见 |
+| `curl -o <文件>` / `--output` / `--output-document` | 最常见；`--output=X` 等号写法同样识别 |
 | `curl -O` / `--remote-name` | 目标文件由 URL 推断 |
-| `wget -O <文件>` | |
-| `Invoke-WebRequest -OutFile <文件>` | 必须带 `-OutFile` |
+| `wget -O <文件>` | 支持 `--output-document=X` |
+| `Invoke-WebRequest -OutFile <文件>` | 必须带 `-OutFile`；`-OutFile:D:\x` 冒号写法也认 |
 | `git clone <url> <目录>` | 采样目录总体积（目标是目录，`stat` 恒为 0，单独走目录树累加） |
 | `powershell -File <脚本>` / `pwsh -File <脚本>` | 读脚本里的 `-OutFile` / `-Destination` / `-o` |
+| `certutil -urlcache -split -f <url> <文件>` | 目标按普通文件采样 |
 
 `-File` 那一行值得单独说：命令本身不含任何路径，插件的做法是**打开脚本静态解析**
 （只读一次，约 0.3 ms），把 `$iso = "D:\…\x.iso"` 这类单层字面量赋值、
@@ -119,12 +120,15 @@ plugin_manager action=remove_bundle target="@local/dsh-download-progress"
 
 **只有「进行中」（无字节数，宿主不提供中间事件）**
 
-插件安装（`pnpm` / `npm` / `yarn`）、网页抓取、`research` / `web_search` 类搜索工具、其他包管理器命令（`pip` / `uv` / `docker pull` / `ollama pull`）。
+插件安装（`pnpm` / `npm` / `yarn`）、网页抓取、`research` / `web_search` 类搜索工具、其他包管理器命令（`pip` / `uv` / `docker pull` / `ollama pull`）、`Start-BitsTransfer`。
+
+`Start-BitsTransfer` 单独说明：它先把字节写进同目录的 `BITxxxx.tmp`，跑完才改名成 `-Destination`。所以目标文件在整个传输期间**根本不存在**，任何盯着 `-Destination` 的进度条都只能是 0%。插件把它标成「分段写入」，只显示已耗时和文件名，不画百分比——这是被测出来的写盘形状，不是猜的。
 
 **拿不到进度的情况**
 
 - 下载不落盘（`curl ... | tar -x`、输出到 stdout）；
 - 命令里用变量拼路径（`-o $dst`）——插件只能读命令文本，无法求值；
+- `Start-BitsTransfer <url>` 只给一个 URL、不给 `-Destination`：文件名由 BITS 自己决定，插件不猜路径；
 - 脚本里的路径要跑起来才知道（`Get-Content cfg.json` 取值、`+` 拼接、here-string、`$(...)` 子表达式）——这类一律**不猜**，不出卡片；
 - 服务端不返回 `Content-Length`（降级为不确定进度条 + 已下载体积 + 速度，无百分比）；
 - 上传（`curl -T` / `--upload-file`）：本端不落文件，不可能有进度，直接不出卡片；
@@ -148,7 +152,7 @@ plugin_manager action=remove_bundle target="@local/dsh-download-progress"
 - **变量路径无法解析**：`-o $dst`、`-o "$(pwd)/file"` 这类写法只能读到字面量。
 - **总大小依赖 HEAD 探测**：对方不给 `Content-Length`、或 HEAD 被拒（403/405，Cloudflare 常见）时没有百分比，只有不确定进度条。
 - **搜索与抓取只有计时器**：响应是一次性返回的，这是宿主能力边界。
-- **轮询而非推送**：Client 每秒拉一次状态，最多 1 秒延迟。
+- **轮询而非推送**：Client 空闲期每秒拉一次状态，有任务在跑时 0.4 秒补一拍——最坏延迟就是那个间隔。
 - **命令解析是启发式的**：curl/wget 参数组合极多，未覆盖的写法会退化成「不触发」或「载入中」。
 - **脚本只读一次、只看字面量**：`-File` 里的路径必须是能静态算出来的（字面量、`param` 默认值、`$env:`、`Join-Path`）；要 `Get-Content` 读配置、字符串拼接、或 `$(...)` 才能定的，插件不猜、不出卡片。脚本改写后需要等下一次工具调用才重新读。
 - **会话重名无法区分**：两个会话同名时，分块块头显示同一个标题。

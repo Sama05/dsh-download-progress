@@ -5,7 +5,7 @@
 > 内容会随 DSH 版本漂移而失效，所以每条结论都尽量带上当时的证据形态，方便复核。
 
 - 包名：`@local/dsh-download-progress`
-- 版本：`0.2.4`
+- 版本：`0.3.0`
 - 运行位置：Host 半在 DSH 主进程，Client 半在 DSH Web UI 的渲染进程
 - 零外部依赖：只用 `node:fs` / `node:path`（Host 半）+ 宿主提供的 `react`（Client 半）
 - 许可证：MIT，见 [LICENSE](LICENSE)
@@ -71,15 +71,25 @@ DSH **没有**"下载进度"这类事件。工具层只有两个端点事件：
 
 | 形态 | 例子 |
 | --- | --- |
-| `curl -o <文件>` / `--output` / `--output-document` | `curl -L -o D:\x\a.zip https://...` |
+| `curl -o <文件>` / `--output` / `--output-document` | `curl -L -o D:\x\a.zip https://...`；`--output=D:\x\a.zip` 等号写法同样识别 |
 | `curl -O` / `--remote-name` | 目标推断为 `cwd + basename(url)` |
-| `wget -O <文件>` | 同上 |
-| `Invoke-WebRequest -OutFile <文件>` | 必须有 `-OutFile` |
+| `wget -O <文件>` | 同上；`--output-document=o.bin` 也可 |
+| `Invoke-WebRequest -OutFile <文件>` | 必须有 `-OutFile`；`-OutFile:D:\x` 冒号写法也认（PS 参数语法允许 `-Param:Value`） |
 | `git clone <url> <dir>` | 采样目录总体积 |
 | `powershell -File <脚本>` / `pwsh -File <脚本>` | 静态解析脚本里的落盘路径，见 2.1.1 |
+| `certutil -urlcache -split -f <url> <文件>` | 合法 urlcache 动作才认，`-hashfile` 等不算 |
 
 进度 = 目标文件体积 / `Content-Length`；速度 = 滑动窗口（约 1s 跨度）算出的字节速率。
-两者都**每秒采样一次**，Client 每秒拉一次。
+Host 每秒采样一次；Client 空闲期每秒拉一次，**有卡在跑时 400 ms 补一拍**（见 8.6.2）。
+
+**`Start-BitsTransfer` 走另一条路**：实测（2026-10-25，`lab/work/write-shape.mjs` 每 200 ms stat）
+BITS 先把字节写进同目录 `BITxxxx.tmp`，14.8 s 时一次性写满 41943040 字节，跑完才改名到
+`-Destination`——**目标文件在整个传输期间不存在**。所以它被登记为 `staged:true`：不探
+`Content-Length`、不算百分比，卡片只画「下载中 + 已耗时」，且 `sweep()` 里不会因「不增长」
+被判成停住。`Start-BitsTransfer <url>`（无 `-Destination`）目标路径由 BITS 自定，一律不猜。
+
+`certutil` 的写盘形状**本机未能实测**（`certutil.exe` 在该环境被策略拦，spawn EPERM，
+三种提权方式都试过）。按普通文件采样处理，属推断而非实测结论。
 
 `git clone` 的目标是**目录**，而 Windows 上 `stat(dir).size` 恒为 0——早期版本直接
 `stat` 目标，于是整个 clone 期间读到「0 字节、无增长」，空闲计数器几秒后就把卡片收了。
@@ -809,7 +819,8 @@ node smoke-host.mjs
 | `detect/segments.js` | 一条命令在哪结束、下一条在哪开始 |
 | `detect/vars.js` | 普通赋值，以及命令真正生效的 cwd |
 | `detect/remote.js` | URL 想被存成什么名字 |
-| `detect/targets.js` | 命令会写到哪些路径 |
+| `detect/targets.js` | 命令会写到哪些路径（按 `spec.js` 的表逐段遍历，不再靠三个布尔拼顺序） |
+| `detect/spec.js` | **下载器注册表**：一张 `TRANSFERS` 表声明每个程序认哪个旗标、是否 staged、是否要位置参数。**加新下载器只改这里** |
 | `detect/downloaders.js` | aria2c 与 git，两个不靠旗标的下载器 |
 | `detect/classify.js` | 判定本身 |
 | `script.js` | barrel：`-File` 静态解析的公开面 |
@@ -819,6 +830,9 @@ node smoke-host.mjs
 | `script/targets.js` | 从调用点解析出落盘路径 |
 | `script/plan.js` | 组装成一份 plan（含 URL / 变量表） |
 | `script/tuning.js` | 大小上限与超时 |
+| `plan.js` | barrel：命令行 → 执行计划（目标、URL、bulk、staged）的公开面 |
+| `plan/expand.js` | `expandPlan()`：把 detect 的解析与 script 的 `-File` 结果合成一份计划 |
+| `plan/aria2.js` | `-i` 清单：读取、解析成真实路径 |
 | `state.js` | barrel：任务簿记的公开面 |
 | `state/tuning.js` | 每一个时长与上限，都注明了它是被哪个 bug 定下来的 |
 | `state/registry.js` | 任务表本身，以及别人读它的那几个把手 |
@@ -1082,27 +1096,30 @@ barrel 的代价是真实存在的（多一次模块解析、IDE 跳转多一跳
 
 重构前后各跑一次，基线存 `bench/baseline.json`，重构后存 `bench/after.json`：
 
-| benchmark | 前 | 后 | 变化 |
+| benchmark | 0.2.4 前 | 0.3.0 后 | 变化 |
 | --- | --- | --- | --- |
-| `classify/curl` | 0.0088 ms | 0.0075 ms | −15% |
-| `classify/-File` | 0.0068 ms | 0.0075 ms | +10% |
-| `script/plan` | 0.3559 ms | 0.3187 ms | −10% |
-| `targets/curl` | 0.0074 ms | 0.0093 ms | +26% |
-| `targets/8-flags` | 0.0114 ms | 0.0132 ms | +16% |
-| `sample/1-card` | 0.0583 ms | 0.0593 ms | +2% |
-| `sample/30-cards` | 1.4330 ms | 1.4178 ms | −1% |
-| `snapshot/30-cards` | 0.0413 ms | 0.0395 ms | −4% |
-| `client/parse-in-vm` | 0.6404 ms | 0.6406 ms | ±0% |
-| `client/read-bytes` | 0.1558 ms | 0.1671 ms | +7% |
-| `host/import-cost` | 1.3186 ms | 1.3984 ms | +6% |
+| `sample/1-card` | 0.0583 ms | 0.0402 ms | −31% |
+| `sample/30-cards` | 1.4330 ms | 0.6946 ms | **−52%** |
+| `snapshot/30-cards` | 0.0413 ms | 0.0425 ms | ±0% |
+| `classify/curl` | 0.0088 ms | 0.0072 ms | −18% |
+| `classify/-File` | 0.0068 ms | 0.0074 ms | +9% |
+| `script/plan` | 0.3559 ms | 0.3773 ms | +6% |
+| `targets/curl` | 0.0074 ms | 0.0062 ms | −16% |
+| `targets/8-flags` | 0.0114 ms | 0.0091 ms | −20% |
+| `client/parse-in-vm` | 0.6404 ms | 0.6277 ms | −2% |
+| `client/read-bytes` | 0.1558 ms | 0.1876 ms | +20% |
+| `host/import-cost` | 1.3186 ms | 1.535 ms | +16% |
 
-**怎么读这张表**：`targets/*` 的 +16~26% 是拆分后多了一层函数调用（同一段逻辑从一个大函数
-变成 `targets.js` 调 `patterns.js`），绝对值只差 **0.002 ms**；`host/import-cost` +6% 是
-模块数从 4 涨到 26 的固定解析成本（**1.4 ms，进程启动时一次**）。
-真正每秒都在跑的 `sample/30-cards` 和 `snapshot/30-cards` **没有变慢**——这是重构的验收线。
-所有数字都在微秒级，对「每秒一次、最多 30 张卡」的真实负载可以忽略。
+**0.3.0 的主要收益在 `sample/*`**：原来每张卡每拍都调 `aria2Completed()`
+（该函数第一件事是 `readFileSync('x.aria2')`，靠 catch ENOENT 判断「没有旁车」）。
+只有 aria2c 会写旁车，curl/wget 卡白付一次抛异常读取 —— 30 卡合计 0.58 ms，
+占 `sample()` 的一半。改成 `task.aria2 ? aria2Completed(target) : undefined` 后
+30 卡从 1.43 ms 降到 0.69 ms，顺带修掉「curl 输出旁残留的 .aria2 被误当成进度」。
+剩下的 0.69 ms 里 30 次 `statSync` 是必要成本（单独实测下限 0.48 ms），没法再省。
 
-**结论**：拆分换来的是「改一处只读一个不到 320 行的文件」，代价是亚毫秒级的一次性成本。
+`host/import-cost` +16% 是新增 `detect/spec.js`、`plan/` 两层后的固定解析成本，
+**进程启动时一次**；`client/read-bytes` +20% 是绝对值 0.03 ms 的抖动，不是回归。
+每秒真的在跑的 `sample/*` 与 `snapshot/*` 都是持平或大幅下降——这是重构的验收线。
 
 ### 8.5.4 微基准的方法论（`bench.mjs` 头部有同样说明）
 
@@ -1111,6 +1128,114 @@ barrel 的代价是真实存在的（多一次模块解析、IDE 跳转多一跳
   warm-up 曲线**——不 warm-up 的话，拆分本身会被误读成性能回退。
 - 报 **median + p95**，不报平均值：GC 抖动会把平均值拉歪。
 - `--json` 出机器可读结果，`--save` 写基线，`--after` 写 `after.json`，便于前后对比。
+
+### 8.6 0.3.0 的结构性改动（2026-10-25）
+
+这一版没加新功能，全是「让下一次改它更容易」的地基。
+
+#### 8.6.1 新增 `plan/` 层：把「命令行 → 执行计划」从任务簿记里搬出来
+
+原来 `state/begin.js` 同时干两件事：解析命令（detect + script）和建任务对象。
+后果是 `state/` 反向 import 了 `detect.js` 与 `script.js` 的内部符号，`state` 与
+`detect` 变成双向依赖。现在中间夹一层 `plan/`：
+
+```
+plan/expand.js   expandPlan(plan, cwd) -> {aria2, clone, bulk, targets, url, remote, staged, label, log}
+plan/aria2.js    原 state/aria2.js 整体搬过来
+```
+
+`state/begin.js` 的 download 分支从 40 行塌成 15 行：`expandPlan` → 赋值 → retarget
+→ label/log → 探针。它现在只 import `PKG_RE`（一个纯正则）与 `expandPlan`。
+
+**注意**：`state.js` 里有 `export { expandPlan } from './plan.js'`，必须从 barrel 转出。
+写成 `'./plan/expand.js'` 会让 `architecture.mjs` 判违规，而且曾真的触发过
+`ERR_MODULE_NOT_FOUND`（当时还叫 `state/aria2.js`）。
+
+#### 8.6.2 `architecture.mjs`：把分层规则变成测试
+
+新文件，约 190 行，纯 Node。一张 `ALLOWED` 表写死每层能 import 谁：
+
+```
+utils      -> 无
+script     -> utils.js, script.js, script/
+detect     -> utils.js, script.js, detect.js, detect/, script/
+plan       -> utils.js, detect.js, script.js, plan.js, plan/
+state      -> utils.js, detect.js, plan.js, plan/, state.js, state/
+background -> utils.js, background.js, background/
+```
+
+扫 `from '...'` / `import '...'`，用 `posix.normalize(join(dirname(rel), spec))` 解析到
+包根再比前缀。违规就打印该层的允许清单并 exit 1。已接在 `npm test` 第二位。
+
+**为什么值得**：`extensibility-invariants` 说「禁止跨模块导入内部符号」，但规则写在
+skill 里没人执行。现在越界的那一行会当场变红。
+
+#### 8.6.3 `detect/spec.js`：下载器注册表
+
+原来 `classify` 与 `targets` 各自硬编码 curl / wget / aria2c / iwr 的旗标与顺序，
+加一个下载器要改两处以上，且两处的「谁优先」容易写反。现在是一张表：
+
+```js
+TRANSFERS = [
+  { id: 'curl',  heads: {curl},  out: CURL_OUTFILE_RE, remoteName: CURL_REMOTE_NAME_RE, upload: CURL_UPLOAD_RE },
+  { id: 'wget',  heads: {wget},  out: WGET_OUTFILE_RE },
+  { id: 'aria2c', heads: {aria2c}, out: ARIA_OUTFILE_RE, dir: ARIA_DIR_RE, input: ARIA_INPUT_RE },
+  { id: 'iwr',   heads: {invoke-webrequest, iwr}, out: PS_OUTFILE_ARG_RE, needsOut: true },
+  { id: 'bits',  heads: {start-bitstransfer}, staged: true, last: true },
+  { id: 'certutil', heads: {certutil}, action: CERTUTIL_URL_RE, last: true },
+]
+```
+
+`transferOf(segment)` 按段头查表，顺带校验 `action`（certutil 只认 `-urlcache`）与
+`needsOut`（iwr 必须带 `-OutFile`）。`classify` 与 `targets` 都改走这张表。
+
+**加一个新下载器现在只改 `spec.js` 一处**：加一行 + 一条 `ok(...)` 断言。
+
+#### 8.6.4 四类原来漏识别的写法（都有 RED 测试）
+
+| 写法 | 原来 | 为什么 |
+| --- | --- | --- |
+| `$r = Invoke-WebRequest … -OutFile x` | 不出卡 | `expandLauncher()` 为了识别 `$p = Start-Process` 会剥 `$x = ` 前缀，但剥完发现不是 Start-Process 就把**原段**返回，段头成了 `$r` |
+| `FOO=1 curl -o a.bin u` | 不出卡 | 同上，bash 的 `NAME=value` 前缀没被剥 |
+| `-OutFile:D:\a.zip` | 不出卡 | `PS_OUTFILE_ARG_RE` 只认空格分隔；`-Param:Value` 是合法的 PS 参数语法（实测过参数绑定） |
+| `curl --output=D:\a.bin` | **出卡但目标为空** | `CURL_OUTFILE_RE` 只认空格分隔 ⇒ 卡片永远停在「载入中」 |
+
+`expandLauncher()` 的修法是加一步 `isCommandShaped(body)`：剥完之后必须以非引号开头、
+且至少两个 token 才当作命令，否则返回原段——这样 `$o = 'D:\out.bin'` 这类纯赋值
+仍然留在 `collectAssignments` 的视野里，`-o $o` 还能解析。
+
+#### 8.6.5 端到端提速：预热 + 400 ms 补拍
+
+- **预热**：`99-plugin.js` 的 `apply()` 里 `taskStore.warm()`。原来第一次请求发生在
+  浮层 mount 的 effect 里，而 DSH 什么时候渲染那个槽位不可控 ⇒ 首帧白等一个 RTT。
+  现在插件一加载就发请求，`subscribe()` 的「frame 非空即回放」直接命中。
+  插件被关掉时不预热（`readSettings().enabled`）。
+- **补拍**：`tick()` 成功后若帧非空，`schedule()` 用 `setTimeout` 排一次 400 ms 后的
+  tick；基线 `setInterval(1000)` 不动。**必须是 `setTimeout` 而不是第二个 `setInterval`**
+  ——`stress-client.mjs` 有一条断言「两个 surface 必须共用一个 poller」
+  （`app.intervals.length === 1`），第二个 interval 会直接把它打红。
+- **CSS 跟着调**：`.ddp-fill` 的 `transition: width` 从 `.45s` 改 `.28s`。原来的值比
+  1 s 轮询短，但比 400 ms 补拍长 ⇒ 活跃期宽度动画永远追不上，进度条会「黏住」。
+
+#### 8.6.6 采样降本：别给不写旁车的下载器查旁车
+
+见 8.5.3 的表。根因一句话：`aria2Completed()` 靠 `readFileSync` 抛 ENOENT 判断
+「没有旁车」，而 curl/wget 永远没有旁车 ⇒ 每卡每拍白付一次异常。30 卡 0.58 ms。
+`task.aria2 ? aria2Completed(target) : undefined` 一行修完，顺带修掉正确性问题。
+
+#### 8.6.7 UI：把无限动画赶出主线程布局
+
+`.ddp-card` 加 `contain: layout paint`；`ddp-slide` / `ddp-shine` 从 `margin-left` /
+`left` 改成 `transform: translateX`。这两个动画是 `infinite` 的，卡片在屏幕上停几分钟
+就一直跑；动布局属性意味着每帧重排整张列表，而列表里每张卡还各带毛玻璃。
+
+**换算不能拍脑袋**：不定态条自身宽 = 父宽 38%，父宽 −38%→100% 换成自身是
+−100%→263%；高光条保留 `left:-40%` 基准，父宽 140% ⇒ 自身 0→350%。
+`stress-client.mjs` 新增两条守卫：`.ddp-card` 必须 `contain`、所有 `@keyframes` 里
+禁止出现 `width/height/left/right/top/bottom/margin/padding`。
+
+**踩坑**：CSS 嵌在 JS 模板字面量里，**CSS 注释中不能出现反引号**，否则模板字符串提前
+结束，报 `SyntaxError: Unexpected identifier`。
 
 ---
 
