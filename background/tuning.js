@@ -31,6 +31,18 @@ export const SHELL_TOOLS = new Set(['bash', 'pwsh', 'shell', 'exec'])
 /** Slack when matching a job's start against the call that is running it. */
 export const FOREGROUND_GRACE_MS = 1000
 
+/**
+ * How long after a shell call returns its registry entry may keep running before
+ * the entry is called background work.
+ *
+ * A foreground command's entry is settled by the shell tool as it returns, but
+ * the event that says so travels on the bus and can land a moment later. Treating
+ * a still-running entry as background the instant the call returns would flash a
+ * row for a command that is already in the transcript; waiting out this window
+ * costs a genuinely detached job a second of silence and nothing else.
+ */
+export const SHELL_SETTLE_MS = 1500
+
 /** A background row disappears this long after it settles. */
 export const LINGER_MS = 4000
 

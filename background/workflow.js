@@ -22,12 +22,17 @@ export function noteWorkflowStart(info) {
   const runId = String(info.id)
   const meta = info.meta || {}
   const phase = Array.isArray(meta.phases) && meta.phases[0] ? meta.phases[0].title : ''
+  // Same rule as a subagent row: a run with no owning session is not recorded,
+  // because nothing can be waiting on it and the row would then appear in every
+  // session's overlay with no way to attribute it.
+  const owner = ownerOfRunning('workflow') || ''
+  if (!owner) return
   flows.set(runId, {
     id: runId,
     type: 'workflow',
     label: String(meta.name || '工作流'),
     detail: String(phase || ''),
-    sessionId: ownerOfRunning('workflow') || '',
+    sessionId: owner,
     sessionTitle: '',
     status: 'running',
     kind: 'workflow',

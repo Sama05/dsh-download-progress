@@ -9,26 +9,29 @@ import { activeTools, jobs } from './tables.js'
 import { FOREGROUND_GRACE_MS, SHELL_TOOLS } from './tuning.js'
 
 /**
- * Was this job registered while its owner sat inside a shell call?
+ * What the shell call was doing when this job appeared.
  *
- * Asked once, at registration, and then remembered on the row — never re-asked.
- * The re-asking is what produced a ghost: a foreground `pwsh` command returns,
- * `noteToolEnd()` clears the active tool, and from that moment the test "is the
- * owner blocked in a shell call" answered no for a job that had been foreground
- * all along. The row therefore surfaced `LINGER_MS` after the command finished —
- * a card that appeared out of nowhere seconds after nothing happened, then
- * vanished on its own. Worse, while a *download* was still running, that
- * resurrected row made the session look busy and kept the download card on
- * screen for two more minutes after it had been interrupted.
+ * Two facts are recorded instead of the boolean "is it foreground", because the
+ * boolean cannot be known yet: a foreground command's registry entry and a
+ * `run_in_background` job both appear while the call is in flight, and only the
+ * call's return tells them apart. `foreground` used to be frozen here, which
+ * made every `run_in_background` job invisible for good — it was registered
+ * under the shell call, so it was filed as foreground and dropped from every
+ * snapshot, while its download card sat there with nothing to explain it.
+ *
+ * `underShell` says the call was in flight (the row may be foreground);
+ * `detached` says the call asked for a background job, which no filtering can
+ * apply to. See `isForegroundJob` for the reading taken later.
  *
  * @param {string} sessionId the job's owner
  * @param {number} startedAt the job's own start, not the registration time
- * @returns {boolean}
+ * @returns {{underShell: boolean, detached: boolean}}
  */
-function startedUnderShell(sessionId, startedAt) {
+function shellContext(sessionId, startedAt) {
   const tool = activeTools.get(sessionId)
-  if (!tool || !SHELL_TOOLS.has(tool.name)) return false
-  return Number(startedAt) >= tool.since - FOREGROUND_GRACE_MS
+  if (!tool || !SHELL_TOOLS.has(tool.name)) return { underShell: false, detached: false }
+  if (Number(startedAt) < tool.since - FOREGROUND_GRACE_MS) return { underShell: false, detached: false }
+  return { underShell: true, detached: tool.args?.run_in_background === true }
 }
 
 /* ------------------------------------------------------------------ *
@@ -53,6 +56,12 @@ export function noteJobEvent(event) {
   const previous = jobs.get(job.id)
   const sessionId = String(job.owner || '')
   const startedAt = Number(job.startedAt) || Date.now()
+  // Fixed once, at registration: only the moment a job appears can say whether a
+  // shell call was in flight, and only that call's arguments can say it asked for
+  // a background job. A later event for the same job keeps the first answer.
+  const context = previous
+    ? { underShell: previous.underShell, detached: previous.detached }
+    : shellContext(sessionId, startedAt)
   jobs.set(job.id, {
     id: String(job.id),
     type: 'job',
@@ -65,11 +74,9 @@ export function noteJobEvent(event) {
     // future kind shows up in the subtitle without a UI change.
     kind: String(job.kind || ''),
     startedAt,
-    // Fixed at registration — see `startedUnderShell`. A later event for the
-    // same job keeps whatever the first one decided, because only the moment the
-    // job was created can tell a shell call's own output registry apart from a
-    // genuinely detached job.
-    foreground: previous ? previous.foreground : startedUnderShell(sessionId, startedAt),
+    // Fixed at registration — see `shellContext`.
+    underShell: context.underShell,
+    detached: context.detached,
     finishedAt: job.finishedAt ? Number(job.finishedAt) : 0,
     // A job that was already listed keeps its settle time; a fresh one starts now.
     seenAt: previous ? previous.seenAt : Date.now(),

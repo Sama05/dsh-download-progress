@@ -32,6 +32,9 @@ import { clip, extractUrl, firstLine, lastLine, uniq, unquote } from './utils.js
 import {
   backgroundSnapshot,
   noteJobEvent,
+  noteSubagentEnd,
+  noteSubagentStart,
+  noteWorkflowStart,
   RECONCILE_AFTER_MS,
   reconcileJobs,
   noteToolEnd,
@@ -39,6 +42,11 @@ import {
   resetBackground,
   setTitleLookup,
 } from './background.js'
+import { subs } from './background/tables.js'
+// Two different LINGER_MS values live in this repo: state/ keeps a finished
+// transfer card for 1200 ms, background/ lingers a settled row for 4000 ms.
+// Aliasing here keeps a future reader from reaching for the wrong one.
+import { LINGER_MS as BG_LINGER_MS, SHELL_SETTLE_MS } from './background/tuning.js'
 
 const ok = (message) => console.log('  ok ' + message)
 
@@ -1212,26 +1220,27 @@ try {
 
 {
   // A shell tool registers its own job while it runs (that registry is how it
-  // streams output). The row must be recognised as foreground at registration,
-  // because by the time the command returns the active-tool table is already
-  // cleared — and a late re-check made the row pop up out of nowhere afterwards,
-  // then vanish. While a download was still up, that ghost also kept the session
-  // "busy" and the download card lived on for two more minutes after a stop.
+  // streams output). The row must be recognised as foreground, because by the
+  // time the command returns the active-tool table is already cleared — and a
+  // late re-check made the row pop up out of nowhere afterwards, then vanish.
+  // While a download was still up, that ghost also kept the session "busy" and
+  // the download card lived on for two more minutes after a stop.
   resetBackground()
+  const fgAt = Date.now()
   noteToolStart('s1', 'pwsh', { command: 'curl -o x.bin https://e.com/x' })
   noteJobEvent({
     type: 'registered',
-    job: { id: 'fg', kind: 'bash', label: 'curl', status: 'running', owner: 's1', startedAt: Date.now() },
+    job: { id: 'fg', kind: 'bash', label: 'curl', status: 'running', owner: 's1', startedAt: fgAt },
   })
-  assert.equal(backgroundSnapshot().length, 0, 'a foreground command is already in the transcript')
+  assert.equal(backgroundSnapshot(fgAt + 100).length, 0, 'a foreground command is already in the transcript')
 
   noteJobEvent({
     type: 'settled',
-    job: { id: 'fg', kind: 'bash', label: 'curl', status: 'completed', owner: 's1', startedAt: Date.now(), finishedAt: Date.now() },
+    job: { id: 'fg', kind: 'bash', label: 'curl', status: 'completed', owner: 's1', startedAt: fgAt, finishedAt: fgAt + 200 },
   })
   noteToolEnd('s1')
-  assert.equal(backgroundSnapshot().length, 0, 'and it must not appear once the call returned')
-  assert.equal(backgroundSnapshot(Date.now() + 60_000).length, 0, 'no ghost after the linger window either')
+  assert.equal(backgroundSnapshot(fgAt + 300).length, 0, 'and it must not appear once the call returned')
+  assert.equal(backgroundSnapshot(fgAt + 60_000).length, 0, 'no ghost after the linger window either')
 
   // A job that outlived its tool call is real background work and stays listed.
   resetBackground()
@@ -1240,8 +1249,104 @@ try {
     job: { id: 'bg', kind: 'bash', label: 'detached', status: 'running', owner: 's2', startedAt: Date.now() },
   })
   assert.equal(backgroundSnapshot().length, 1, 'a job with no shell call behind it is background')
+
+  /* The other half of the same bug: `run_in_background` registers its job while
+   * the call is still in flight, exactly like a foreground command does, so a
+   * flag frozen at registration filed it as foreground and hid it for good —
+   * a transfer card with no row saying what else was running. */
   resetBackground()
-  ok('background: a foreground command never surfaces as a row, a detached job does')
+  const bgAt = Date.now()
+  noteToolStart('s1', 'pwsh', { run_in_background: true, command: 'node server.js' })
+  noteJobEvent({
+    type: 'registered',
+    job: { id: 'real-bg', kind: 'bash', label: 'node server.js', status: 'running', owner: 's1', startedAt: bgAt },
+  })
+  noteToolEnd('s1')
+  assert.equal(backgroundSnapshot(bgAt + 100).length, 1, 'a detached job is background the moment it registers')
+  assert.equal(backgroundSnapshot(bgAt + 60_000).length, 1, 'and never becomes foreground later')
+  assert.equal(backgroundSnapshot(bgAt + 60_000)[0].id, 'real-bg')
+
+  /* A job the call left behind without asking for it — the timeout-promotion
+   * path — is background too. It only looks foreground while the call runs. */
+  resetBackground()
+  const promotedAt = Date.now()
+  noteToolStart('s1', 'pwsh', { timeoutMs: 3000 })
+  noteJobEvent({
+    type: 'registered',
+    job: { id: 'promoted', kind: 'bash', label: 'slow', status: 'running', owner: 's1', startedAt: promotedAt },
+  })
+  assert.equal(backgroundSnapshot(promotedAt + 100).length, 0, 'while the call runs its entry stays hidden')
+  noteToolEnd('s1')
+  assert.equal(
+    backgroundSnapshot(promotedAt + SHELL_SETTLE_MS + 100).length,
+    1,
+    'an entry still running after the call returned is background work',
+  )
+
+  resetBackground()
+  ok('background: a foreground command never surfaces as a row, a detached job always does')
+}
+
+/* ------------------------------------------------------------------ */
+/* 11. background work nobody owns must not become a row               */
+/* ------------------------------------------------------------------ */
+
+{
+  /* Subagent and workflow rows infer their owner from whichever session is
+   * blocked in the tool. Some producers start a child outside the tool system
+   * entirely — an idle housekeeping checkpoint does exactly that — so there is
+   * no session to infer. The row used to be filed anyway under sessionId ''.
+   *
+   * Why that was visible everywhere: the client's "current session only" filter
+   * defaults to OFF, so a row with no session id matched no filter and painted
+   * in EVERY session's overlay — a permanent "子代理 · 运行中" line the user
+   * could neither attribute nor wait on, appearing seconds after the session
+   * went idle and vanishing when the checkpoint finished. Nothing in the
+   * transcript explained it, because it never belonged to this session. */
+  resetBackground()
+  noteSubagentStart({ id: 'orphan-child', provider: 'deepseek' })
+  assert.equal(backgroundSnapshot().length, 0, 'an unattached subagent is not background work')
+  assert.equal(subs.size, 0, 'and it is not even recorded')
+
+  // The same call WITH a session blocked in the tool is real work: the overlay
+  // is meant to say "this session is waiting on a child".
+  resetBackground()
+  noteToolStart('s9', 'subagent', { prompt: 'x' })
+  noteSubagentStart({ id: 'owned-child', provider: 'deepseek' })
+  const owned = backgroundSnapshot()
+  assert.equal(owned.length, 1, 'a child the session is blocked on is listed')
+  assert.equal(owned[0].sessionId, 's9')
+  assert.equal(owned[0].waiting, true, 'and it explains the silence')
+  noteToolEnd('s9')
+
+  // A child that settles lingers so it can be noticed, then leaves.
+  noteSubagentEnd({ id: 'owned-child' })
+  assert.equal(backgroundSnapshot().length, 1, 'a settled child lingers long enough to be seen')
+  assert.equal(backgroundSnapshot()[0].status, 'done')
+  assert.equal(backgroundSnapshot(Date.now() + BG_LINGER_MS + 1).length, 0, 'and then leaves')
+
+  resetBackground()
+  noteWorkflowStart({ id: 'orphan-flow', meta: { name: 'housekeeping' } })
+  assert.equal(backgroundSnapshot().length, 0, 'an unattached workflow is not background work either')
+
+  resetBackground()
+  noteToolStart('s9', 'workflow', {})
+  noteWorkflowStart({ id: 'owned-flow', meta: { name: 'housekeeping', phases: [{ title: 'step 1' }] } })
+  const flow = backgroundSnapshot()
+  assert.equal(flow.length, 1, 'a workflow the session is blocked on is listed')
+  assert.equal(flow[0].sessionId, 's9')
+  assert.equal(flow[0].detail, 'step 1')
+  noteToolEnd('s9')
+
+  /* The gate in backgroundSnapshot enforces the same rule for every producer,
+   * including one written later that forgets to check. It is exercised directly
+   * here: a hand-filed ownerless row must not reach the wire either. */
+  resetBackground()
+  subs.set('hand-filed', { id: 'hand-filed', type: 'subagent', label: '子代理', detail: '', sessionId: '', status: 'running', startedAt: Date.now(), finishedAt: 0, seenAt: Date.now() })
+  assert.equal(backgroundSnapshot().length, 0, 'the snapshot gate drops an ownerless row even if filed directly')
+
+  resetBackground()
+  ok('background: a child or run no session owns never becomes a row')
 }
 
 /* ------------------------------------------------------------------ */
@@ -1312,6 +1417,97 @@ try {
   assert.equal(visible(), 0, 'an interrupted download retires within seconds, not two minutes')
   rmSync(dir, { recursive: true, force: true })
   ok('state: an interrupted download retires even while its session is busy')
+}
+
+/* ------------------------------------------------------------------ */
+/* 12. dropping an ownerless row must not affect any real detection    */
+/* ------------------------------------------------------------------ */
+
+{
+  /* Section 11 filters rows nobody owns. The fear that motivates this section
+   * is that the filter reaches further than the overlay: that a subagent doing
+   * real work stops being reported, or — worse — that a download started
+   * inside a subagent stops being tracked. Neither table is shared, and this
+   * section pins that down so a future change cannot quietly couple them.
+   *
+   * A download card lives in the `tasks` table and is kept alive by sweep();
+   * a background row lives in the `background` tables and only tells the
+   * overlay what else is running. The two meet at exactly one place: index.js
+   * asks backgroundSnapshot() which sessions are running work, and hands that
+   * set to sweep() so a card outlives the call that started it. */
+  const dir = mkdtempSync(join(tmpdir(), 'dp-orphan-'))
+
+  // A download started by a subagent that IS owned: it must be tracked, and the
+  // session must count as busy so its card survives past the call.
+  resetBackground()
+  tasks.clear()
+  noteToolStart('parent-1', 'subagent', { prompt: 'download it' })
+  noteSubagentStart({ id: 'child-sess-1', provider: 'deepseek' })
+  const childDl = beginTask(
+    { callId: 'dl-child', name: 'pwsh', agent: { id: 'child-sess-1' } },
+    { kind: 'download', command: 'curl -o c.bin https://e.com/c.bin' },
+    dir,
+  )
+  childDl.done = true
+  childDl.bytes = 5_000_000
+  childDl.total = 10_000_000
+  childDl.speed = 1_000_000
+  childDl.idleTicks = 0
+  assert.equal(snapshot().length, 1, 'a download inside an owned subagent is tracked')
+  assert.equal(backgroundSnapshot().length, 1, 'and the subagent itself is reported')
+
+  // The parent's call returns. The child keeps working; the row stays because
+  // it is owned, and the download must not be retired with it.
+  noteToolEnd('parent-1')
+  let now = Date.now()
+  let alive = 0
+  for (let i = 0; i < 60; i += 1) {
+    now += 1000
+    childDl.bytes += 500_000
+    childDl.idleTicks = 0
+    const busy = new Set(
+      backgroundSnapshot(now).filter((row) => row.status === 'running').map((row) => String(row.sessionId || '')),
+    )
+    sweep(now, (sessionId) => busy.has(String(sessionId || '')))
+    if (snapshot().length > 0) alive += 1
+  }
+  assert.equal(alive, 60, 'a growing download survives its own subagent being reported')
+
+  // The case the fix introduces: an ownerless row is dropped, and the busy set
+  // is then empty. The card must STILL survive on its own merits — it is
+  // growing, and sweep() keeps a growing transfer regardless of who is busy.
+  resetBackground()
+  tasks.clear()
+  noteSubagentStart({ id: 'orphan-cp', provider: 'deepseek' })
+  const orphanDl = beginTask(
+    { callId: 'dl-orphan', name: 'pwsh', agent: { id: 'sess-x' } },
+    { kind: 'download', command: 'curl -o d.bin https://e.com/d.bin' },
+    dir,
+  )
+  orphanDl.done = true
+  orphanDl.bytes = 1000
+  orphanDl.total = 2000
+  orphanDl.speed = 100
+  orphanDl.idleTicks = 0
+  assert.equal(backgroundSnapshot().length, 0, 'the ownerless row is filtered')
+  let now2 = Date.now()
+  let alive2 = 0
+  for (let i = 0; i < 60; i += 1) {
+    now2 += 1000
+    orphanDl.bytes += 100
+    orphanDl.idleTicks = 0
+    const busy = new Set(
+      backgroundSnapshot(now2).filter((row) => row.status === 'running').map((row) => String(row.sessionId || '')),
+    )
+    sweep(now2, (sessionId) => busy.has(String(sessionId || '')))
+    if (snapshot().length > 0) alive2 += 1
+  }
+  assert.equal(alive2, 60, 'and a download is tracked for as long as it is growing, ownerless row or not')
+
+  rmSync(dir, { recursive: true, force: true })
+  tasks.clear()
+  resetBackground()
+  ok('background: dropping an ownerless row changes no download and no real subagent')
 }
 
 console.log('\nHOST SMOKE OK — utils, detect and state behave as documented')

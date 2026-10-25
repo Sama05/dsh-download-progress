@@ -13,6 +13,8 @@ export const subs = new Map()
 export const flows = new Map()
 /** @type {Map<string, object>} session id -> the tool it is currently blocked in */
 export const activeTools = new Map()
+/** @type {Map<string, number>} session id -> when its last shell call returned */
+export const shellEndedAt = new Map()
 
 /** Resolves a session id to its display name; replaced by index.js. */
 let titleOf = () => ''

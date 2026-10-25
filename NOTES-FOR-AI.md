@@ -5,7 +5,7 @@
 > 内容会随 DSH 版本漂移而失效，所以每条结论都尽量带上当时的证据形态，方便复核。
 
 - 包名：`@local/dsh-download-progress`
-- 版本：`0.1.1`
+- 版本：`0.2.4`
 - 运行位置：Host 半在 DSH 主进程，Client 半在 DSH Web UI 的渲染进程
 - 零外部依赖：只用 `node:fs` / `node:path`（Host 半）+ 宿主提供的 `react`（Client 半）
 - 许可证：MIT，见 [LICENSE](LICENSE)
@@ -951,6 +951,92 @@ async function probeTotal(url, task) {
 
 `snapshot()` 与 `sweep()` 本身没有改：它们的复杂度已经是线性的，且实测远低于预算，
 提前优化只会换来没必要的复杂度。
+
+---
+
+### 8.4.1 后台行的三次翻车（0.2.2 / 0.2.3 / 0.2.4，2026-10-25）
+
+这三版连着修同一个区域，每次都是「上一版只测了一个方向」。记在这里是因为**测试的盲区比代码的 bug 更贵**。
+
+#### 0.2.2：把「注册时是什么」冻成了结论
+
+```
+noteJobEvent() 注册那一刻：row.foreground = startedUnderShell()
+```
+
+问题：`run_in_background` 的 job 恰恰是在 shell 工具调用**尚未返回时**注册的，和「前台命令自己的输出登记」时刻相同、形状相同 ⇒ 被永久判成 foreground ⇒ `backgroundSnapshot` 里被 `isForegroundJob()` 过滤掉，**整类后台任务被吞**。
+
+当时的测试只断言了「前台命令不许画成后台任务」，**没有反向断言「真后台必须出现」**，所以整类任务消失也测不出来。
+
+#### 0.2.3：注册时不猜答案，只记事实
+
+```
+background/tables.js     shellEndedAt: Map<sessionId, number>   // 上次 shell 调用返回时刻
+background/tuning.js     SHELL_SETTLE_MS = 1500                 // 等总线上的 settle 事件落地
+background/jobs.js       shellContext() 返回 { underShell, detached }
+                         detached = tool.args?.run_in_background === true
+background/waits.js      isForegroundJob(row, now)：
+                           type !== 'job' || !underShell  → false（不是 job，不过滤）
+                           detached === true              → false（真后台一定露出）
+                           endedAt === 0                  → true （调用还在飞）
+                           now - endedAt < SETTLE_MS      → true （同上）
+                           否则 live = running|stopping  → !live
+background/snapshot.js   resetBackground() 里 shellEndedAt.clear()
+```
+
+**关键事实**：`dsh-jobs` 服务只发 `registered` / `settled` / `progress`，**根本不发 `removed`**（全 asar 扫过：只有 `dsh-jobs-local/lib/index.js` 同时含这三个词）。所以「靠 removed 事件自然消失」这条路不存在，过滤必须留在 Host 侧。
+
+#### 0.2.4：第二类幽灵行 —— 没有会话归属的 subagent/workflow
+
+```
+background/subagent.js   owner 推不出来 ⇒ 不登记（原来会登记成 sessionId: ''）
+background/workflow.js   同上
+background/snapshot.js   出口统一强制：type 是 subagent/workflow 且无 sessionId ⇒ continue
+```
+
+**这类行是什么**：mnemon 的空闲检查点（idle review）会派生一个子代理跑检查任务。它**从 `tools/execute` 工具系统之外启动**，所以 `ownerOfRunning('subagent')` 推断不出父会话，返回空串。
+
+**为什么用户在每个会话都看得到它**：客户端「只看当前会话」`currentOnly` 默认 **false**（这是用户明确要求的，不许改默认值，见主文档第 4 节第 5 条），无归属行匹配不上任何过滤条件 ⇒ 每个会话的浮层都画它。用户既无法归因，也无法等待，更关不掉。
+
+**为什么在 `snapshot.js` 出口再拦一道**：producer 可能有新的、忘检查的。所有行都要过这一个闸，规则放这里才不会漏。这不是冗余——第 12 节测试专门验证了手工往 `subs` 里塞无归属行也会被拦。
+
+**被否掉的方案**：事件里其实带了父 id（宿主 `createLifecycleEmitter` 里是 `emit(name, info, parent)`），但那个 `parent` 只用于**作用域过滤**（当 carrier 用），监听器回调拿到的是 `callback(info)`，**第三个实参永远到不了监听器**。所以别想着「直接用 parent」，只能用推断 + 无归属就丢弃。
+
+#### 这三版共同的教训
+
+| 教训 | 具体 |
+| --- | --- |
+| **只测一个方向等于没测** | 0.2.2 只测「前台别冒出来」，漏了「真后台必须出来」 |
+| **`LINGER_MS` 同名不同值** | `state/tuning.js:15` = `1200`（任务卡滞留）；`background/tuning.js:47` = `4000`（后台行滞留）。`smoke-host.mjs` 顶部 import 的是前者，写背景行断言必踩。已用 `BG_LINGER_MS` 别名区分 |
+| **「没出现」≠「修好了」** | 必须先证明被测的东西确实发生了。详见下一节 |
+
+### 8.4.2 怎么验证「某行不再出现」（可复用的取证流程）
+
+**不要**用截图，也**不要**只问用户「还在吗」。用独立 Node 进程采样状态路由：
+
+```js
+// 关键：走独立 node 进程，不经 DSH 工具系统
+// ⇒ 采样本身不会在后台任务区登记任何行，不污染被测对象
+setInterval(async () => {
+  const body = await (await fetch(url, { cache: 'no-store' })).json()
+  const orphan = body.background.filter(r => r && !String(r.sessionId || ''))
+  // 必须记录每行的 归属（owned / ORPHAN），否则分不清「没修好」和「压根没触发」
+}, 400)
+```
+
+**然后必须先证明触发源真的动了**。验证 0.2.4 那次，第一次的「没出现」是**无效证据**：
+
+| 检查项 | 结果 |
+| --- | --- |
+| `C:\Users\Sama05\.mnemon\` 在上次启动后有无新写入 | **无**（一个文件都没写） |
+| 有无新的子代理会话目录 | **无** |
+| 最近一次检查点运行时刻 | 20:43:46 |
+
+原因：`minIntervalMs` 默认 300000ms，上次 20:43:46 + 5min = 21:13:46 之前全被节流挡掉。**检查点没跑，当然没有那行。**
+
+第二次（有效）同时满足：新的子代理会话（21:21:54）+ 写下了新记忆文档（21:22:37）+ mnemon 库落盘（21:22:52）；探针在该窗口 153 次采样 `bg` 恒为 0、`ORPHAN` 全程 0。
+
+**判据公式**：`触发源确有活动 AND 目标现象全程未出现` 才算验证通过。缺前半句 = 什么都没证明。
 
 ---
 

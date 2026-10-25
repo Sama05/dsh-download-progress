@@ -5,7 +5,7 @@
  * (why "running" and "waiting" differ, and why every producer is optional)
  * lives in background.js.
  */
-import { activeTools, flows, jobs, subs, title } from './tables.js'
+import { activeTools, flows, jobs, shellEndedAt, subs, title } from './tables.js'
 import { jobStatus } from './jobs.js'
 import { isForegroundJob, isWaitedOn } from './waits.js'
 import { LINGER_MS, MAX_ROWS, RECONCILE_AFTER_MS } from './tuning.js'
@@ -32,8 +32,14 @@ export function backgroundSnapshot(now = Date.now()) {
     }
     // A foreground command is already in the transcript; listing it here would
     // double-report it and claim "the agent is waiting" for a plain tool call.
-    if (isForegroundJob(row)) continue
+    if (isForegroundJob(row, now)) continue
     const sessionId = String(row.sessionId || '')
+    // No owner, no question answered. The producers already refuse such a row,
+    // but every row passes through here, so the rule is enforced at the one gate
+    // rather than trusted to each producer. An ownerless row is worse than absent:
+    // the client's "current session only" filter is off by default, so it would
+    // paint in every session's overlay as work nobody can attribute.
+    if (!sessionId && (row.type === 'subagent' || row.type === 'workflow')) continue
     rows.push({
       id: row.id,
       type: row.type,
@@ -109,4 +115,5 @@ export function resetBackground() {
   subs.clear()
   flows.clear()
   activeTools.clear()
+  shellEndedAt.clear()
 }
