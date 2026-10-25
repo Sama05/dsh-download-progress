@@ -28,7 +28,7 @@
  * the card layer receives concrete paths and never parses a command itself.
  */
 export { FETCH_TOOLS, SEARCH_TOOLS, SHELL_TOOLS } from './detect/tools.js'
-export { GIT_CLONE_RE, PKG_RE, PS_OUTFILE_RE, PS_SCRIPT_FILE_RE } from './detect/patterns.js'
+export { GIT_CLONE_RE, PKG_RE, PS_SCRIPT_FILE_RE } from './detect/patterns.js'
 export { commandSegments } from './detect/segments.js'
 export { transferIsStaged } from './detect/spec.js'
 export { commandWorkingDirectory } from './detect/vars.js'

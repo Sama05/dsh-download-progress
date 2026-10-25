@@ -227,6 +227,18 @@ assert.deepEqual(extractTargets('Start-BitsTransfer https://x/a.iso D:\\a.iso', 
 assert.deepEqual(extractTargets('certutil -urlcache -split -f https://x/a.iso D:\\a.iso', CWD), [
   'D:\\a.iso',
 ])
+// A quoted destination keeps its spaces. Splitting the segment on whitespace cut
+// the path in two and left the card watching `<cwd>\Downloads\a.iso`.
+assert.deepEqual(
+  extractTargets(
+    "Start-BitsTransfer -Source 'https://x/a.iso' -Destination 'D:\\My Downloads\\a.iso'",
+    CWD,
+  ),
+  ['D:\\My Downloads\\a.iso'],
+)
+assert.deepEqual(extractTargets('certutil -urlcache -split -f https://x/a.iso "D:\\My ISOs\\a.iso"', CWD), [
+  'D:\\My ISOs\\a.iso',
+])
 // Without `-Destination`, BITS derives the file name from the URL itself. There
 // is no path in the command, so guessing one would watch a file nothing writes:
 // the card stays unresolved instead.

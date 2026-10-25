@@ -7,9 +7,6 @@
  * rule read out of context is how `-O` and `-o` got swapped in the first place.
  */
 
-/** `-OutFile` is what turns an Invoke-WebRequest into something sampleable. */
-export const PS_OUTFILE_RE = /(?:^|\s)-OutFile(?=\s)/i
-
 /**
  * A script run by `powershell -File <script>` / `pwsh -File <script>`.
  *
@@ -209,35 +206,8 @@ function basenameOf(token) {
   return token.split(SEPARATOR_RE).pop() || ''
 }
 
-/** Programs that transfer bytes to a file; the head of a segment must be one. */
-export const DOWNLOADER_NAMES = new Set(['curl', 'wget', 'aria2c'])
-
 /** Shells that take `-File` to mean "run this script". */
 export const SCRIPT_HOSTS = new Set(['powershell', 'pwsh'])
-
-/** Treats a segment as a downloader invocation, honouring a full path. */
-export function runsDownloader(segment) {
-  return DOWNLOADER_NAMES.has(headProgram(segment))
-}
-
-/**
- * Whether a segment is curl *sending* bytes instead of receiving them.
- *
- * The head test is what keeps `wget -T 60 -O out.bin <url>` — where `-T` is
- * `--timeout` — from being mistaken for an upload.
- *
- * @param {string} segment
- * @returns {boolean}
- */
-export function runsCurlUpload(segment) {
-  return headProgram(segment) === 'curl' && CURL_UPLOAD_RE.test(segment)
-}
-
-/** `Invoke-WebRequest` (or `iwr`) at the head of its segment. */
-export function runsInvokeWebRequest(segment) {
-  const name = headProgram(segment)
-  return name === 'invoke-webrequest' || name === 'iwr'
-}
 
 /**
  * `git clone`, allowing flags between the two words (`git -C dir clone …`).

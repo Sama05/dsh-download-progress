@@ -118,8 +118,40 @@ export function transferIsStaged(segment) {
 
 /** The last non-flag token of a command line, or '' when there is none. */
 export function lastPositional(segment) {
-  const tokens = segment.trim().split(/\s+/).filter(Boolean)
-  const positionals = tokens.filter((token) => !token.startsWith('-'))
+  const positionals = shellTokens(segment).filter((token) => !token.startsWith('-'))
   // `[head, …]`: a lone head names no output at all.
   return positionals.length > 1 ? positionals[positionals.length - 1] : ''
+}
+
+/**
+ * Whitespace-separated tokens, with quotes honoured and stripped.
+ *
+ * `psArrayTokens` cannot do this job: it also splits on commas, which is right
+ * for `-ArgumentList 'a','b'` and wrong for a file name that contains one. And
+ * splitting on `/\s+/` at all was a bug — `'D:\My ISOs\a.iso'` is one argument,
+ * so the card watched `<cwd>\a.iso` and never moved.
+ */
+function shellTokens(segment) {
+  const out = []
+  let token = ''
+  let quote = ''
+  let started = false
+  for (const ch of segment.trim()) {
+    if (quote) {
+      if (ch === quote) quote = ''
+      else token += ch
+    } else if (ch === '"' || ch === "'") {
+      quote = ch
+      started = true
+    } else if (/\s/.test(ch)) {
+      if (started) out.push(token)
+      token = ''
+      started = false
+    } else {
+      token += ch
+      started = true
+    }
+  }
+  if (started) out.push(token)
+  return out
 }
