@@ -13,6 +13,8 @@
  */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { apply } from '../index.js'
 
@@ -132,9 +134,14 @@ test('POST 打开后不再报 off（ok 或 degraded 都是"已尝试"）', () =>
   assert.ok(stream === 'ok' || stream === 'degraded', 'expected ok or degraded, got ' + stream)
 })
 
-test('宿主不支持 hook 时 stream 报 unavailable，而不是 off 或 degraded', () => {
+test('宿主没有 hook 但 http 层可包时，stream 仍是 ok（两条覆盖线互不依赖）', () => {
   // 夹具是一个独立脚本：它删掉 registerHooks、打开开关、读一帧快照。
   // 做成文件而不是内联 -e 字符串，是为了不让引号转义变成测试的主要难点。
+  //
+  // 这里考的是**两条覆盖线的独立性**：`registerHooks` 只影响 undici 那层；
+  // http/https 那层换的是模块导出，任何 Node 都能做。所以在「无 hook」的宿主
+  // 上，只要 http 层装上，诚实答案就是 `ok` —— 说 `unavailable` 会变成
+  // 「明明能用却说不能用」，比谎报更糟。
   const fixture = fileURLToPath(new URL('./fixtures/no-hooks-host.mjs', import.meta.url))
   const result = spawnSync(process.execPath, [fixture], {
     encoding: 'utf8',
@@ -143,7 +150,57 @@ test('宿主不支持 hook 时 stream 报 unavailable，而不是 off 或 degrad
   assert.equal(result.status, 0, 'fixture must boot: ' + String(result.stderr || '').slice(0, 400))
   const caps = JSON.parse(result.stdout)
   assert.equal(caps.modules, 'unavailable', 'no registerHooks means modules is unavailable')
-  assert.equal(caps.stream, 'unavailable', 'switch on + no capability must be unavailable, not degraded')
+  assert.equal(
+    caps.stream,
+    'ok',
+    'the http layer does not need registerHooks, so the switch still measures',
+  )
+})
+
+test('两层都装不上时才报 unavailable', () => {
+  // 用子进程把两层的安装都打成失败：删掉 registerHooks（undici 层失去能力），
+  // 再把 http/https 的 request/get 设成不可写（http 层 patch 失败）。
+  const script = `
+    import Module from 'node:module'
+    import http from 'node:http'
+    import https from 'node:https'
+    delete Module.registerHooks
+    for (const mod of [http, https]) {
+      for (const key of ['request', 'get']) {
+        Object.defineProperty(mod, key, { value: mod[key], writable: false, configurable: false })
+      }
+    }
+    const { apply } = await import(${JSON.stringify(new URL('../index.js', import.meta.url).href)})
+    const routes = []
+    apply({
+      effect: (fn) => { try { fn() } catch {} ; return () => {} },
+      on: () => {},
+      get: () => undefined,
+      webServer: { register: (r) => (routes.push(r), () => {}) },
+    })
+    const cfg = routes.find((r) => r.path === '/download-progress/config')
+    const hs = {}
+    cfg.handler({ on: (n, f) => (hs[n] = f) }, { writeHead() {}, end() {} })
+    hs.data?.(JSON.stringify({ depthProgress: true }))
+    hs.end?.()
+    const state = routes.find((r) => r.path === '/download-progress/state')
+    let body = null
+    state.handler({ method: 'GET', headers: {} }, { writeHead() {}, end: (p) => { body = JSON.parse(p) } })
+    process.stdout.write(JSON.stringify({ caps: body.capabilities, stream: body.stream }))
+    process.exit(0)
+  `
+  const tmp = fileURLToPath(new URL('./fixtures/no-layer-host.mjs', import.meta.url))
+  mkdirSync(dirname(tmp), { recursive: true })
+  writeFileSync(tmp, script, 'utf8')
+  const result = spawnSync(process.execPath, [tmp], { encoding: 'utf8', timeout: 30_000 })
+  assert.equal(result.status, 0, 'fixture must boot: ' + String(result.stderr || '').slice(0, 400))
+  const out = JSON.parse(result.stdout)
+  assert.equal(out.stream.http, false, 'the http layer must have failed to install')
+  assert.equal(
+    out.caps.stream,
+    'unavailable',
+    'no hooks and no patchable http module means the switch cannot work at all',
+  )
 })
 
 test('POST 关掉后回到 off', () => {

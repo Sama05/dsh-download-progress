@@ -39,6 +39,7 @@ import {
 import { text } from './utils.js'
 import { depthProgress, setDepthProgress } from './sensor/config.js'
 import { installStreamSensor, streamDiagnostics, streamInstalled } from './sensor/stream.js'
+import { httpSensorInstalled, installHttpSensor } from './sensor/https.js'
 
 /** Where the Client half polls. Served by the host's own web server. */
 const ROUTE_PATH = '/download-progress/state'
@@ -144,8 +145,26 @@ function capabilities() {
   }
   let stream = 'off'
   if (depthProgress()) {
-    if (modules !== 'ok') stream = 'unavailable'
-    else stream = streamInstalled() ? 'ok' : 'degraded'
+    // Two sensors cover two disjoint HTTP implementations:
+    //
+    //   `streamInstalled()`       undici.fetch is wrapped (the host's own web_fetch)
+    //   `httpSensorInstalled()`   http/https.request is wrapped (everything else,
+    //                             including dsh-free-search's fs-quality-fetch)
+    //
+    // "ok" when *either* is live. And when neither is, distinguish the two
+    // failure modes instead of collapsing them:
+    //
+    //   unavailable  this host structurally cannot do it (no module hooks AND no
+    //                patchable http module) → telling the user to flip a switch
+    //                would be a lie
+    //   degraded     it tried and failed → the switch was accepted but nothing
+    //                is measuring
+    //
+    // A user who flipped the switch is never told it works while no byte reaches
+    // the card; that is the whole point of this function.
+    if (streamInstalled() || httpSensorInstalled()) stream = 'ok'
+    else if (modules !== 'ok' && !httpSensorInstalled()) stream = 'unavailable'
+    else stream = 'degraded'
   }
   return { modules, stream }
 }
@@ -291,36 +310,48 @@ export function apply(ctx) {
   ctx.on('workflow/log', noteWorkflowLog)
   ctx.on('workflow/end', noteWorkflowEnd)
 
-  // The depth-progress sensor. Its lifecycle follows the switch, so it is
-  // re-checked on a timer rather than driven by an event: the POST route only
-  // flips a boolean, and one place that reads it is easier to reason about than
-  // a callback chain. A host that cannot install hooks reports `unavailable` and
-  // never tries again — the probe is memoised.
-  // The depth-progress sensor. Installed at plugin start, not when the switch is
-  // flipped — and that ordering is load-bearing, not a style choice:
+  // Two sensors, two coverage lines — both installed at plugin start, not when
+  // the switch is flipped. That ordering is load-bearing:
   //
-  //   - the hook rewrites undici's source through `Module.registerHooks`' `load`
-  //     hook, and undici is CJS;
+  //   - the undici layer rewrites the module's source through
+  //     `Module.registerHooks`' `load` hook, and undici is CJS;
   //   - a CJS cache hit does NOT run the `load` hook at all (measured: register
   //     after loading → hits = 0, see docs/probe/late-hook.mjs);
   //   - the host imports undici long before a user can find the settings page.
   //
   // So installing on switch-on misses the injection permanently while still
   // reporting success — that was the live bug: `capabilities.stream = ok` with
-  // zero byte events. Installing here means the wrapper is in place from the
-  // start; the switch only decides whether `noteStreamBytes` is fed, and the
-  // wrapper passes the body straight through when it is off.
+  // zero byte events.
+  //
+  // They are NOT alternatives. undici is a separate HTTP implementation that
+  // never goes through `http.request`, and `http.request` covers everything that
+  // never goes through undici. The host on this machine demonstrates why both are
+  // needed: `dsh-free-search`'s `fs-quality-fetch` takes over `web_fetch` and
+  // fetches with `node:https` (lib/fetch_provider.js:201), so the undici layer
+  // alone would never see a single byte of it.
+  //
+  // The https layer is also the stable one: it swaps module exports on a public
+  // Node API, so it works whenever it is installed, with no cache-timing trap.
   ctx.effect(() => {
-    let dispose = null
+    let disposeStream = null
+    let disposeHttp = null
     const sync = () => {
-      // One install, never re-installed: `installStreamSensor` is idempotent, and
-      // a hook that came off cannot come back for an already-loaded module.
-      if (dispose) return
-      try {
-        dispose = installStreamSensor({ onBytes: noteStreamBytes, gate: depthProgress })
-      } catch {
-        /* a sensor that cannot install is a degraded capability, not a crash */
-        dispose = null
+      // One install each, never re-installed: both are idempotent, and a hook
+      // that came off cannot come back for an already-loaded module.
+      if (!disposeStream) {
+        try {
+          disposeStream = installStreamSensor({ onBytes: noteStreamBytes, gate: depthProgress })
+        } catch {
+          /* a sensor that cannot install is a degraded capability, not a crash */
+          disposeStream = null
+        }
+      }
+      if (!disposeHttp) {
+        try {
+          disposeHttp = installHttpSensor({ gate: depthProgress })
+        } catch {
+          disposeHttp = null
+        }
       }
     }
     sync()
@@ -328,7 +359,12 @@ export function apply(ctx) {
     return () => {
       clearInterval(timer)
       try {
-        if (typeof dispose === 'function') dispose()
+        if (typeof disposeHttp === 'function') disposeHttp()
+      } catch {
+        /* already disposed */
+      }
+      try {
+        if (typeof disposeStream === 'function') disposeStream()
       } catch {
         /* already disposed */
       }
@@ -390,11 +426,12 @@ export function apply(ctx) {
             schemaVersion: SCHEMA_VERSION,
             buildTag: BUILD_TAG,
             capabilities: capabilities(),
-            // The three sub-facts behind `capabilities.stream`. Sent so a live
-            // host can be asked *why* a card has no percentage without attaching
-            // a debugger: `wrapped: false, loaded: true` means the injection
-            // missed; `sawEvent: true` means it is definitely working.
-            stream: streamDiagnostics(),
+            // The sub-facts behind `capabilities.stream`, sent so a live host can
+            // be asked *why* a card has no percentage without attaching a
+            // debugger. `wrapped: false, loaded: true` means the undici injection
+            // missed; `sawEvent: true` means bytes are definitely arriving.
+            // `http` covers the other coverage line (http/https.request).
+            stream: { ...streamDiagnostics(), http: httpSensorInstalled() },
             tasks: snapshot(),
             background: backgroundSnapshot(),
           })
