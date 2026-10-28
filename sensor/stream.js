@@ -128,6 +128,9 @@ export function installStreamSensor(options) {
   // 交给这里。消费者抛错不能回到流里，否则一次 UI 异常会中断一个下载。
   const sink = (event) => {
     if (!event || typeof event !== 'object') return
+    // 收到事件本身就是最硬的证据：包装确实在工作。记下来，能力上报据此直接
+    // 报 ok，不必再依赖缓存内省。
+    if (active) active.sawEvent = true
     try {
       onBytes({
         url: String(event.url || ''),
@@ -154,7 +157,7 @@ export function installStreamSensor(options) {
         // 只改 undici 主入口，别的模块原样放行 —— 这条 hook 全局生效，
         // 每一行多余的工作都会摊到宿主的每次 import 上。
         if (url.endsWith(UNDICI_SUFFIX) && result && result.source) {
-          return { ...result, source: String(result.source) + WRAPPER }
+          return { ...result, source: decodeSource(result.source) + WRAPPER, shortCircuit: true }
         }
         return result
       },
@@ -168,6 +171,20 @@ export function installStreamSensor(options) {
     return null
   }
 
+  // 自证：钩子注册成功 ≠ 注入成功。
+  //
+  // undici 是 CJS 包，CJS 缓存命中时 `load` 钩子**根本不触发**（实测：
+  // 已加载后再注册钩子，hits = 0）。宿主启动时早就 import 过它了，所以用户
+  // 打开开关时，钩子虽然注册成功、`fetch` 却从未被替换 —— 卡片照样出，一个
+  // 字节事件都不会来。真机上就是这样：`capabilities.stream = ok` 而 `bytes = 0`。
+  //
+  // 判据不能只看注册结果，也不能在安装这一刻一锤定音：
+  //   - undici 已加载（宿主常态）⇒ 立刻就能查缓存，不是我们的函数就是没装上；
+  //   - undici 还没加载 ⇒ 此刻缓存是空的，查不到不代表失败，钩子会在它被加载
+  //     时注入。这种情况要留到「它真的加载之后」再判。
+  //
+  // 所以 `streamInstalled()` 是一个**持续判断**，不是一次性的开关。
+
   let disposed = false
   const dispose = () => {
     if (disposed) return
@@ -180,19 +197,94 @@ export function installStreamSensor(options) {
     restoreSink(hadSink, previousSink)
     active = null
   }
-  active = { dispose }
+  active = { dispose, sawEvent: false, wrapped: () => proveInjection() }
   return dispose
 }
 
 /**
- * 传感器是否真的装上了。
+ * 传感器是否真的装上了（能拿到字节）。
  *
- * `capabilities()` 用它区分 `ok`（在跑）与 `degraded`（想开但装不上）。
+ * 三个条件任一成立即算装上：
+ *   1. 宿主那份 undici 的 `fetch` 已经是我们的包装函数
+ *   2. 已经真的收到过字节事件（最硬的证据）
+ *   3. 钩子还挂在宿主上，且 undici 尚未加载（等它加载就会注入）
+ *
+ * 条件 3 是必要的：插件启动时装钩子、undici 稍后才加载，这个窗口里既查不到
+ * 包装也还没有事件，但它确实会生效。把它判成失败，会让正常路径误报降级。
  *
  * @returns {boolean}
  */
 export function streamInstalled() {
-  return active !== null
+  if (active === null) return false
+  if (active.sawEvent) return true
+  if (active.wrapped()) return true
+  return !undiciLoaded()
+}
+
+/**
+ * 把 `load` 钩子拿到的 `source` 变成字符串。
+ *
+ * CJS 模块的 `source` 是 **Buffer**，不是字符串：`String(buffer)` 得到的是
+ * `'<Buffer 27 75 73 ...>'` 这种调试字符��，不是源码。直接拼包装片段会得到一段
+ * 语法垃圾。必须按字节解码。
+ *
+ * @param {unknown} source
+ * @returns {string}
+ */
+function decodeSource(source) {
+  if (typeof source === 'string') return source
+  if (source instanceof ArrayBuffer) return Buffer.from(source).toString('utf8')
+  if (ArrayBuffer.isView(source)) {
+    return Buffer.from(source.buffer, source.byteOffset, source.byteLength).toString('utf8')
+  }
+  return String(source)
+}
+
+/**
+ * 宿主那份 undici 的 `fetch` 现在是我们的包装函数吗？
+ *
+ * 判据是函数名 `ddpFetch`（写死在 `WRAPPER` 里），不依赖缓存对象的具体形状：
+ * 有的宿主用 `require.cache`，有的用别的加载器，名字匹配对两者都成立。
+ *
+ * @returns {boolean}
+ */
+function proveInjection() {
+  try {
+    const cached =
+      typeof Module._cache === 'object' && Module._cache ? Module._cache : require.cache
+    for (const key of Object.keys(cached || {})) {
+      if (!String(key).replace(/\\/g, '/').endsWith(UNDICI_SUFFIX)) continue
+      const exports = cached[key] && cached[key].exports
+      if (exports && typeof exports.fetch === 'function' && exports.fetch.name === 'ddpFetch') {
+        return true
+      }
+    }
+  } catch {
+    /* 拿不到缓存就是无法自证，按失败处理 */
+  }
+  return false
+}
+
+/**
+ * 宿主已经加载过 undici 了吗？
+ *
+ * 「加载过但没被我们包住」= 注入永久错过了（CJS 缓存不会失效），这是真正的
+ * 降级。区分这一条与「还没加载」，是 `streamInstalled()` 不误报的关键。
+ *
+ * @returns {boolean}
+ */
+function undiciLoaded() {
+  try {
+    const cached =
+      typeof Module._cache === 'object' && Module._cache ? Module._cache : require.cache
+    for (const key of Object.keys(cached || {})) {
+      if (String(key).replace(/\\/g, '/').endsWith(UNDICI_SUFFIX)) return true
+    }
+  } catch {
+    /* 拿不到缓存就当作已加载：宁可报降级，不要谎报 ok */
+    return true
+  }
+  return false
 }
 
 /**
