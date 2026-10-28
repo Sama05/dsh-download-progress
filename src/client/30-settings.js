@@ -27,6 +27,11 @@
       currentOnly: false,
       // Off by default: sample cards must never be mistaken for a real download.
       debugMode: false,
+      // Off by default. This one is not a display preference — it decides whether
+      // the host wraps undici's `fetch` so a `web_fetch` or search can report
+      // bytes at all. Off means those cards stay indeterminate, exactly as they
+      // did before the switch existed.
+      depthProgress: false,
       theme: 'auto',
       enterAnim: 'float',
       // null x means "horizontally centred"; a number is a percentage of the
@@ -238,6 +243,10 @@
           typeof src.currentOnly === 'boolean' ? src.currentOnly : DEFAULTS.currentOnly,
         debugMode:
           typeof src.debugMode === 'boolean' ? src.debugMode : DEFAULTS.debugMode,
+        depthProgress:
+          typeof src.depthProgress === 'boolean'
+            ? src.depthProgress
+            : DEFAULTS.depthProgress,
         theme: themeExists(src.theme) ? src.theme : DEFAULTS.theme,
         enterAnim:
           ENTER_ANIM_IDS.indexOf(src.enterAnim) >= 0 ? src.enterAnim : DEFAULTS.enterAnim,

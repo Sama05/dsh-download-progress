@@ -823,6 +823,11 @@ window.__ModuleLoader__.load({
       currentOnly: false,
       // Off by default: sample cards must never be mistaken for a real download.
       debugMode: false,
+      // Off by default. This one is not a display preference — it decides whether
+      // the host wraps undici's `fetch` so a `web_fetch` or search can report
+      // bytes at all. Off means those cards stay indeterminate, exactly as they
+      // did before the switch existed.
+      depthProgress: false,
       theme: 'auto',
       enterAnim: 'float',
       // null x means "horizontally centred"; a number is a percentage of the
@@ -1034,6 +1039,10 @@ window.__ModuleLoader__.load({
           typeof src.currentOnly === 'boolean' ? src.currentOnly : DEFAULTS.currentOnly,
         debugMode:
           typeof src.debugMode === 'boolean' ? src.debugMode : DEFAULTS.debugMode,
+        depthProgress:
+          typeof src.depthProgress === 'boolean'
+            ? src.depthProgress
+            : DEFAULTS.depthProgress,
         theme: themeExists(src.theme) ? src.theme : DEFAULTS.theme,
         enterAnim:
           ENTER_ANIM_IDS.indexOf(src.enterAnim) >= 0 ? src.enterAnim : DEFAULTS.enterAnim,
@@ -1166,6 +1175,72 @@ window.__ModuleLoader__.load({
       return FAKE_KINDS.map((kind) => fakeTask(kind, Math.max(0, now - startedAt)))
     }
 
+    /* ---------------- depth progress switch (client -> host) ---------------- */
+
+    /**
+     * The write half of the depth-progress switch.
+     *
+     * The preference itself lives in localStorage with the rest of the settings,
+     * because that is where this plugin's settings have always lived and it keeps
+     * the read path synchronous. But the sensor lives in the **host process**, and
+     * only the host can install it — so every change is pushed over the write
+     * route, and once more on mount, because the host may have restarted since
+     * the user last touched the toggle.
+     *
+     * Deliberately fire-and-forget: a failed push means the card quietly falls
+     * back to what it showed before, which is a worse card, not a broken plugin.
+     * There is no error banner for this — a user who moved a switch does not want
+     * a network dialog about it.
+     */
+    const CONFIG_ROUTE = '/download-progress/config'
+
+    /**
+     * @param {unknown} enabled
+     * @param {typeof fetch} [impl] injectable for tests only
+     * @returns {Promise<boolean>} whether the host accepted it
+     */
+    async function pushDepthSwitch(enabled, impl) {
+      const body = JSON.stringify({ depthProgress: enabled === true })
+      // A host without `fetch` (or a sandbox like the smoke harness) has no way
+      // to accept the switch. Report that instead of throwing out of a `useEffect`,
+      // where React would turn it into a render error.
+      const doFetch =
+        typeof impl === 'function'
+          ? impl
+          : typeof window.fetch === 'function'
+            ? window.fetch.bind(window)
+            : null
+      if (!doFetch) return false
+      try {
+        const url = new URL(CONFIG_ROUTE, window.location.origin).toString()
+        const res = await doFetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body,
+          // The route answers 204 with no body; asking for JSON would throw on
+          // a perfectly successful response.
+          cache: 'no-store',
+        })
+        return Boolean(res && res.ok)
+      } catch {
+        return false
+      }
+    }
+
+    /**
+     * Keep the host's switch equal to the stored preference.
+     *
+     * Called once on mount and on every change. The mount push is what makes a
+     * host restart converge: the preference is in localStorage, the sensor is
+     * not, and nothing else would tell the host.
+     *
+     * @param {boolean} enabled
+     */
+    function useDepthSwitch(enabled) {
+      React.useEffect(() => {
+        pushDepthSwitch(enabled)
+      }, [enabled])
+    }
     /* ---------------- enter / exit presence ---------------- */
 
     // Keeps a component mounted long enough to play its exit animation. Real
@@ -2673,6 +2748,11 @@ window.__ModuleLoader__.load({
     function SettingsPage() {
       const settings = useSettings()
       const set = writeSettings
+      // The preference is in localStorage; the sensor is in the host process.
+      // This is the only thing that carries one to the other, and it fires on
+      // mount as well, so a host restart converges without the user retouching
+      // the switch.
+      useDepthSwitch(settings.depthProgress)
 
       return h(
         'div',
@@ -2696,6 +2776,12 @@ window.__ModuleLoader__.load({
           hint: '在已下载大小旁边显示当前速度，例如 3.2 MB/s。',
           checked: settings.showSpeed,
           onChange: (next) => set({ showSpeed: next }),
+        }),
+        toggleRow({
+          label: '深度进度（包装宿主 HTTP 客户端）',
+          hint: '关闭（默认）：能落盘的下载（curl / wget / aria2c / git clone / BITS）靠文件大小算进度；网页抓取、搜索这类不落盘的仍然只有计时。打开：在宿主进程里包装 undici 的 fetch，把响应体读成可计数的流，抓取也有百分比。代价是宿主每次 import 都要多走一层 load 钩子，并且这是对宿主内部实现的依赖——宿主升级换了打包方式就会降级为关闭状态，不会崩。',
+          checked: settings.depthProgress,
+          onChange: (next) => set({ depthProgress: next }),
         }),
         toggleRow({
           label: '调试模式（显示模拟数据）',

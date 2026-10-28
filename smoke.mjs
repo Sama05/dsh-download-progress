@@ -336,7 +336,8 @@ console.log('\ncontrols:', JSON.stringify(controls.map((c) => ({ kind: c.kind, t
 const checkboxes = controls.filter((c) => c.kind === 'input' && c.type === 'checkbox')
 const selects = controls.filter((c) => c.kind === 'select')
 const buttons = controls.filter((c) => c.kind === 'button')
-if (checkboxes.length !== 4) throw new Error('expected 4 checkboxes, got ' + checkboxes.length)
+// Five toggles: 浮层开关 / 速度 / 深度进度 / 调试模式 / 只看当前会话。
+if (checkboxes.length !== 5) throw new Error('expected 5 checkboxes, got ' + checkboxes.length)
 if (selects.length !== 5) throw new Error('expected 5 selects, got ' + selects.length)
 if (buttons.length !== 1) throw new Error('expected the reset-position button')
 

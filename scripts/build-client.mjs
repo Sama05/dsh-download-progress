@@ -35,6 +35,7 @@ const ORDER = [
   '20-utils.js',
   '30-settings.js',
   '40-samples.js',
+  '41-depth.js',
   '50-presence.js',
   '60-data.js',
   '70-views.js',
