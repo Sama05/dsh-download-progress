@@ -56,9 +56,19 @@ function canonicalUrl(raw) {
 }
 
 /**
- * @param {{url: string, bytes: number, total: number, done: boolean}} event
+ * 两帧之间至少要有这么长的跨度才更新速度。
+ *
+ * 同一毫秒里到达的两个 chunk 会让 `delta / span` 除出一个假峰值；宁可保留
+ * 上一次的读数，等跨度够了再更新。
  */
-export function noteStreamBytes(event) {
+const MIN_STREAM_SPEED_SPAN_MS = 50
+
+/**
+ * @param {{url: string, bytes: number, total: number, done: boolean}} event
+ * @param {number} [at] 事件到达时刻（毫秒）。测试用它造确定的时间跨度；
+ *   生产路径不传，取 `Date.now()`。
+ */
+export function noteStreamBytes(event, at) {
   if (!event || typeof event !== 'object') return
   const raw = String(event.url || '')
   if (!raw) return
@@ -66,17 +76,39 @@ export function noteStreamBytes(event) {
   const bytes = Number(event.bytes) || 0
   const total = Number(event.total) || 0
   const done = event.done === true
+  const now = Number.isFinite(at) ? at : Date.now()
   for (const task of tasks.values()) {
     // 没有 url 的任务（安装、包管理器）永远不该被字节事件命中。
     if (!task.url) continue
     if (canonicalUrl(task.url) !== url) continue
+
+    // 速度在这里算，不等 `sample()`。
+    //
+    // `sample()` 只处理 `kind === 'download'`（它的活是 stat 文件），fetch /
+    // search 任务在那里提前 return。真机因此出现过「bytes 已经 10 MB、speed
+    // 恒为 0」。流事件自己带着时间与字节数，本来就够算。
+    //
+    // 用真实跨度而不是固定分母：轮询抖动、事件合并都会让两帧间隔从 4 ms 变到
+    // 2 s，除以固定值会算出天文数字。
+    const previousBytes = Number(task.bytes) || 0
+    const previousAt = Number(task.streamAt) || Number(task.startedAt) || now
+    const delta = bytes - previousBytes
+    if (delta > 0) {
+      const span = now - previousAt
+      if (span >= MIN_STREAM_SPEED_SPAN_MS) task.speed = (delta * 1000) / span
+    } else if (done) {
+      // 结束了就不再谎报在传输：0 是诚实的读数。
+      task.speed = 0
+    }
+
     task.bytes = bytes
     if (total > 0) task.total = total
+    task.streamAt = now
     // 流观测是活着的：它直接来自正在读的字节，不受 `START_GRACE_MS` 影响。
     // `idleTicks` 与 `lastGrowthAt` 一起维持，"还在收字节" 与 "已经停了"
     // 在 `sweep()` 里靠它判断，所以这里必须同步更新。
     task.idleTicks = 0
-    task.lastGrowthAt = Date.now()
+    task.lastGrowthAt = now
     if (done) task.streamDone = true
   }
 }

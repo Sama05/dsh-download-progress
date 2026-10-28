@@ -131,5 +131,39 @@ test('字节数与 total 单调推进，done 之前不会回退', () => {
   assert.equal(t.total, 100)
 })
 
+test('速度由流事件自身算出来，不等磁盘采样', () => {
+  // 真机实测：`web_fetch` 的卡片 bytes 已经 10 MB，但 `speed` 恒为 0。
+  // 因为 `sample()` 只处理 `kind === 'download'`，fetch 任务提前 return ——
+  // 而速度原来只在 `sample()` 里算。流事件自己有时间和字节数，应当自己算。
+  const t = seed('a', 'https://example.com/f.bin')
+  const start = Date.now()
+  // 三帧，跨度约 600ms，字节 0 → 300k → 600k
+  noteStreamBytes({ url: 'https://example.com/f.bin', bytes: 0, total: 1e6, done: false }, start)
+  noteStreamBytes({ url: 'https://example.com/f.bin', bytes: 300_000, total: 1e6, done: false }, start + 300)
+  noteStreamBytes({ url: 'https://example.com/f.bin', bytes: 600_000, total: 1e6, done: false }, start + 600)
+  assert.ok(t.speed > 0, 'a stream-measured task must report a rate, got ' + t.speed)
+  // 600k / 0.6s = 1 MB/s，允许 ±50% 的定时抖动。
+  assert.ok(t.speed > 500_000 && t.speed < 1_500_000, 'expected ~1 MB/s, got ' + Math.round(t.speed))
+})
+
+test('漏掉很多帧之后速度不会被算成天文数字', () => {
+  // 一次延迟很长的轮询会让「跨度」变得很大、字节增量也很大，两者相除仍然
+  // 合理；但如果只按字节增量除以一个很小的固定分母，就会爆表。这里钉住
+  // 「用真实跨度」这一点。
+  const t = seed('a', 'https://example.com/f.bin')
+  const start = Date.now()
+  noteStreamBytes({ url: 'https://example.com/f.bin', bytes: 0, total: 1e9, done: false }, start)
+  noteStreamBytes({ url: 'https://example.com/f.bin', bytes: 2_000_000, total: 1e9, done: false }, start + 2000)
+  assert.ok(t.speed > 500_000 && t.speed < 1_500_000, 'expected ~1 MB/s over 2s, got ' + Math.round(t.speed))
+})
+
+test('done 事件把 streamDone 置位，卡片才能退场', () => {
+  const t = seed('a', 'https://example.com/f.bin')
+  noteStreamBytes({ url: 'https://example.com/f.bin', bytes: 100, total: 100, done: false })
+  assert.equal(t.streamDone, false, 'not finished yet')
+  noteStreamBytes({ url: 'https://example.com/f.bin', bytes: 100, total: 100, done: true })
+  assert.equal(t.streamDone, true, 'the body ended')
+})
+
 console.log(`\n${passed} passed, ${failures.length} failed`)
 process.exit(failures.length ? 1 : 0)
