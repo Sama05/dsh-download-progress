@@ -1227,7 +1227,7 @@ window.__ModuleLoader__.load({
        * lets both surfaces read one consistent snapshot instead of one surface
        * showing transfers from t=0 and background from t=1.
        */
-      frame: { tasks: [], background: [] },
+      frame: { tasks: [], background: [], capabilities: {} },
       /** Readers to notify on every frame. */
       readers: new Set(),
       /** The one interval, or null while nobody is watching. */
@@ -1266,7 +1266,7 @@ window.__ModuleLoader__.load({
         // clearly gone — the policy the per-component loop used, now applied
         // once for every surface instead of once per surface.
         if (++this.failures >= POLL_FAILURES_BEFORE_CLEAR) {
-          this.publish({ tasks: [], background: [] })
+          this.publish({ tasks: [], background: [], capabilities: {} })
         }
       },
 
@@ -1282,11 +1282,13 @@ window.__ModuleLoader__.load({
        * this plugin ever shipped — both are read field by field.
        *
        * @param {unknown} data
-       * @returns {{tasks: object[], background: object[]}}
+       * @returns {{tasks: object[], background: object[], capabilities: object}}
        */
       adopt(data) {
-        if (Array.isArray(data)) return { tasks: data, background: [] }
-        if (!data || typeof data !== 'object') return { tasks: [], background: [] }
+        if (Array.isArray(data)) return { tasks: data, background: [], capabilities: {} }
+        if (!data || typeof data !== 'object') {
+          return { tasks: [], background: [], capabilities: {} }
+        }
         const version = Number(data.schemaVersion)
         // Forward compatibility is deliberate: never gate the frame on it.
         if (Number.isFinite(version) && version > SCHEMA_VERSION_SEEN) {
@@ -1295,6 +1297,16 @@ window.__ModuleLoader__.load({
         return {
           tasks: Array.isArray(data.tasks) ? data.tasks : [],
           background: Array.isArray(data.background) ? data.background : [],
+          // Copied field by field, not held by reference: the response object is
+          // dropped right after `adopt()`, and a live reference would let a later
+          // mutation of a shared object change a frame already on screen.
+          capabilities:
+            data.capabilities && typeof data.capabilities === 'object'
+              ? {
+                  stream: String(data.capabilities.stream || ''),
+                  modules: String(data.capabilities.modules || ''),
+                }
+              : {},
         }
       },
 
@@ -1386,7 +1398,7 @@ window.__ModuleLoader__.load({
        * then not a state change, which keeps "no news" distinguishable from
        * "the list just emptied".
        *
-       * @param {(frame: {tasks: object[], background: object[]}) => void} reader
+       * @param {(frame: {tasks: object[], background: object[], capabilities: object}) => void} reader
        * @returns {() => void} unsubscribe
        */
       subscribe(reader) {
@@ -1407,7 +1419,7 @@ window.__ModuleLoader__.load({
       },
     }
 
-    const EMPTY_FRAME = { tasks: [], background: [] }
+    const EMPTY_FRAME = { tasks: [], background: [], capabilities: {} }
 
     /**
      * Read the shared frame.
@@ -1417,7 +1429,7 @@ window.__ModuleLoader__.load({
      * running without drawing anything itself.
      *
      * @param {boolean} enabled
-     * @returns {{tasks: object[], background: object[]}}
+     * @returns {{tasks: object[], background: object[], capabilities: object}}
      */
     function useTasks(enabled) {
       const [frame, setFrame] = React.useState(EMPTY_FRAME)
@@ -1511,6 +1523,55 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 这一帧的能力状态，是四个已知值之一。
+     *
+     * 老 Host 不送 `capabilities`，那就按 `'off'` 处理：与「用户没开」同义，
+     * 界面的说法仍然是「可以打开」，而不是「不支持」。反过来，任何不认识的值
+     * 也退成 `'off'`，因为「去打开试试」在这三种说法里是最不容易误导人的。
+     *
+     * @param {unknown} capabilities
+     * @returns {'off'|'ok'|'unavailable'|'degraded'}
+     */
+    function streamState(capabilities) {
+      const value = capabilities && capabilities.stream
+      if (value === 'ok' || value === 'unavailable' || value === 'degraded') return value
+      return 'off'
+    }
+
+    /**
+     * 一句「为什么没有百分比」。
+     *
+     * 只在确实拿不到分数时产出，而且只在**这条任务本来可以**有分数时才提到
+     * 深度进度：给一个安装卡片说「打开深度进度吧」是在骗人，那条路本来就没有
+     * 字节流。
+     *
+     * 四种状态必须是四种说法，因为它们对用户意味着完全不同的行动：
+     *
+     *   off          → 你能打开它
+     *   ok           → 已经开着，在等字节（或正在建立连接）
+     *   unavailable  → 开着也没用，这个环境不支持
+     *   degraded     → 开了，但装不上，已降级
+     *
+     * 把 `unavailable` / `degraded` 说成「去打开」是这一层最容易犯的错：用户照做
+     * 之后还是一样，只会认为插件坏了。
+     *
+     * @param {object} ctx
+     * @returns {string}
+     */
+    function noPercentHint(ctx) {
+      if (ctx.hasTotal) return ''
+      // 磁盘采样的下载没有 total 只是「服务端没给 content-length」，深度进度
+      // 也救不了它；安装、包管理更没有字节流可数。
+      if (ctx.progressSource !== 'stream') return ''
+      if (ctx.stream === 'ok') {
+        return ctx.bytes === 0 ? '正在建立连接...' : ''
+      }
+      if (ctx.stream === 'unavailable') return '当前环境不支持深度进度'
+      if (ctx.stream === 'degraded') return '深度进度开启失败，已降级为仅计时'
+      return '打开「深度进度」可显示百分比'
+    }
+
+    /**
      * Flatten one wire task into everything a card needs.
      *
      * Numbers are coerced once, here, so `Card` never re-parses `task.bytes` /
@@ -1535,6 +1596,10 @@ window.__ModuleLoader__.load({
         log: logOf(task),
         unresolved: task.unresolved === true,
         staged: task.staged === true,
+        // Which layer is measuring this shape, and whether the measuring layer
+        // that would help is on. The pair decides the "why no percentage" line.
+        progressSource: String(task.progressSource || 'none'),
+        stream: streamState(options && options.capabilities),
       }
       ctx.hasTotal = Number.isFinite(ctx.total) && ctx.total > 0
       // Nothing measured yet and nothing moving: the transfer has not produced a
@@ -1549,6 +1614,9 @@ window.__ModuleLoader__.load({
       // its first bitmap save. A genuinely finished task has bytes > 0 and never
       // reaches here; one that died at zero retires within a few ticks.
       ctx.preparing = ctx.bytes === 0 && ctx.speed === 0
+      // Why there is no score. Computed once here so every surface — the card and
+      // the composer chip — says the same thing about the same state.
+      ctx.hint = noPercentHint(ctx)
 
       const build = VIEWS[ctx.kind] || fallbackView
       const { name, meta } = build(ctx)
@@ -1557,7 +1625,12 @@ window.__ModuleLoader__.load({
       const percent =
         ctx.kind === 'download' && ctx.hasTotal
           ? clamp((ctx.bytes / ctx.total) * 100, 0, 100)
-          : null
+          : // A `fetch` has bytes and a total once the stream sensor is on, and
+            // it deserves the same bar a download gets — that is the whole point
+            // of the switch. Without a total there is nothing to draw.
+            ctx.kind === 'fetch' && ctx.hasTotal
+            ? clamp((ctx.bytes / ctx.total) * 100, 0, 100)
+            : null
 
       return {
         name,
@@ -1565,6 +1638,11 @@ window.__ModuleLoader__.load({
         percent,
         determinate: percent !== null,
         log: ctx.log,
+        hint: ctx.hint,
+        // One short label for where the number came from, empty when the number
+        // needs no explanation (a disk-sampled download is the obvious case).
+        sourceLabel:
+          ctx.progressSource === 'stream' && ctx.stream === 'ok' ? 'HTTP 流观测' : '',
       }
     }
 
@@ -1574,7 +1652,10 @@ window.__ModuleLoader__.load({
 
     function Card(props) {
       const task = props.task || {}
-      const view = describe(task, { showSpeed: props.showSpeed })
+      const view = describe(task, {
+        showSpeed: props.showSpeed,
+        capabilities: props.capabilities,
+      })
       const percent = view.percent
       const phase = props.phase === 'out' ? 'out' : 'in'
       const delay = phase === 'in' ? Math.max(0, Number(props.index) || 0) * STAGGER_MS : 0
@@ -1604,6 +1685,9 @@ window.__ModuleLoader__.load({
           ),
           percent === null ? null : h('span', { className: 'ddp-tip' }, percent.toFixed(1) + '%'),
         ),
+        // Why there is no percentage. Rendered only when `describe()` produced a
+        // reason, so a working bar never grows an extra line.
+        view.hint ? h('div', { className: 'ddp-hint' }, view.hint) : null,
         view.log ? h('div', { className: 'ddp-log' }, view.log) : null,
       )
     }
@@ -1744,6 +1828,7 @@ window.__ModuleLoader__.load({
               key: task.id || String(index),
               task,
               showSpeed: props.showSpeed,
+              capabilities: props.capabilities,
               ease: props.ease,
               phase: props.phase,
               // The stagger is per session block, so two sessions that start at
@@ -1865,13 +1950,15 @@ window.__ModuleLoader__.load({
      *
      * @param {object} task
      */
-    function briefOf(task) {
+    function briefOf(task, capabilities) {
       const bytes = Number(task.bytes) || 0
       const total = Number(task.total)
       const hasTotal = Number.isFinite(total) && total > 0
       const speed = Number(task.speed) || 0
       const rate = fmtSpeed(speed)
       const kind = String(task.kind || '')
+      const source = String(task.progressSource || 'none')
+      const stream = streamState(capabilities)
 
       // Only a download with a known total has a fraction worth drawing. Every
       // other shape would have to invent one. A transfer that has counted no
@@ -1881,10 +1968,14 @@ window.__ModuleLoader__.load({
       // tick while the job runs on (see the same note in `describe`).
       const staged = kind === 'download' && task.staged === true
       const preparing = kind === 'download' && !staged && bytes === 0 && speed === 0
+      // A `fetch` gets the same bar once the stream sensor measured it, which is
+      // what the depth-progress switch buys. Without a total there is nothing to
+      // draw, so it stays a ring.
+      const measurable =
+        (kind === 'download' && !task.unresolved && !staged && !preparing) ||
+        (kind === 'fetch' && bytes > 0)
       const percent =
-        kind === 'download' && hasTotal && !task.unresolved && !staged && !preparing
-          ? clamp((bytes / total) * 100, 0, 100)
-          : null
+        hasTotal && measurable ? clamp((bytes / total) * 100, 0, 100) : null
 
       if (percent !== null) {
         return {
@@ -1928,6 +2019,14 @@ window.__ModuleLoader__.load({
       // A download whose total never resolved still knows how much landed.
       if (kind === 'download' && bytes > 0) bits.push(fmtBytes(bytes))
       if (rate) bits.push(rate)
+      // One phrase about the unmeasurable case, in a bubble that has room for it.
+      // Only a stream-shaped task can be helped by the switch; saying "turn it on"
+      // over an install would be a promise nothing can keep.
+      if (source === 'stream') {
+        if (stream === 'off') bits.push('可开启深度进度')
+        else if (stream === 'unavailable') bits.push('环境不支持深度进度')
+        else if (stream === 'degraded') bits.push('深度进度已降级')
+      }
       return {
         shape: 'ring',
         percent: null,
@@ -2107,7 +2206,9 @@ window.__ModuleLoader__.load({
       // which is exactly when "the agent is waiting" is the useful message.
       const head = mine[0]
       const bg = head ? null : backgroundBrief(mineBackground)
-      const brief = head ? briefOf(head) : bg || IDLE_BRIEF
+      // `streamState` lives in 70-views.js; every fragment shares one closure, so
+      // the chip and the card cannot disagree about what the switch is doing.
+      const brief = head ? briefOf(head, frame.capabilities) : bg || IDLE_BRIEF
       const extra = mine.length - 1
 
       const style = themeTokens(settings.theme) || undefined
@@ -2485,6 +2586,7 @@ window.__ModuleLoader__.load({
                       key: run.key || 'session-' + index,
                       run,
                       showSpeed: settings.showSpeed,
+                      capabilities: frame.capabilities,
                       ease: settings.enterAnim,
                       phase: leaving ? 'out' : 'in',
                     }),
@@ -2494,6 +2596,7 @@ window.__ModuleLoader__.load({
                       key: task.id || String(index),
                       task,
                       showSpeed: settings.showSpeed,
+                      capabilities: frame.capabilities,
                       ease: settings.enterAnim,
                       phase: leaving ? 'out' : 'in',
                       index,

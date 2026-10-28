@@ -33,7 +33,7 @@
        * lets both surfaces read one consistent snapshot instead of one surface
        * showing transfers from t=0 and background from t=1.
        */
-      frame: { tasks: [], background: [] },
+      frame: { tasks: [], background: [], capabilities: {} },
       /** Readers to notify on every frame. */
       readers: new Set(),
       /** The one interval, or null while nobody is watching. */
@@ -72,7 +72,7 @@
         // clearly gone — the policy the per-component loop used, now applied
         // once for every surface instead of once per surface.
         if (++this.failures >= POLL_FAILURES_BEFORE_CLEAR) {
-          this.publish({ tasks: [], background: [] })
+          this.publish({ tasks: [], background: [], capabilities: {} })
         }
       },
 
@@ -88,11 +88,13 @@
        * this plugin ever shipped — both are read field by field.
        *
        * @param {unknown} data
-       * @returns {{tasks: object[], background: object[]}}
+       * @returns {{tasks: object[], background: object[], capabilities: object}}
        */
       adopt(data) {
-        if (Array.isArray(data)) return { tasks: data, background: [] }
-        if (!data || typeof data !== 'object') return { tasks: [], background: [] }
+        if (Array.isArray(data)) return { tasks: data, background: [], capabilities: {} }
+        if (!data || typeof data !== 'object') {
+          return { tasks: [], background: [], capabilities: {} }
+        }
         const version = Number(data.schemaVersion)
         // Forward compatibility is deliberate: never gate the frame on it.
         if (Number.isFinite(version) && version > SCHEMA_VERSION_SEEN) {
@@ -101,6 +103,16 @@
         return {
           tasks: Array.isArray(data.tasks) ? data.tasks : [],
           background: Array.isArray(data.background) ? data.background : [],
+          // Copied field by field, not held by reference: the response object is
+          // dropped right after `adopt()`, and a live reference would let a later
+          // mutation of a shared object change a frame already on screen.
+          capabilities:
+            data.capabilities && typeof data.capabilities === 'object'
+              ? {
+                  stream: String(data.capabilities.stream || ''),
+                  modules: String(data.capabilities.modules || ''),
+                }
+              : {},
         }
       },
 
@@ -192,7 +204,7 @@
        * then not a state change, which keeps "no news" distinguishable from
        * "the list just emptied".
        *
-       * @param {(frame: {tasks: object[], background: object[]}) => void} reader
+       * @param {(frame: {tasks: object[], background: object[], capabilities: object}) => void} reader
        * @returns {() => void} unsubscribe
        */
       subscribe(reader) {
@@ -213,7 +225,7 @@
       },
     }
 
-    const EMPTY_FRAME = { tasks: [], background: [] }
+    const EMPTY_FRAME = { tasks: [], background: [], capabilities: {} }
 
     /**
      * Read the shared frame.
@@ -223,7 +235,7 @@
      * running without drawing anything itself.
      *
      * @param {boolean} enabled
-     * @returns {{tasks: object[], background: object[]}}
+     * @returns {{tasks: object[], background: object[], capabilities: object}}
      */
     function useTasks(enabled) {
       const [frame, setFrame] = React.useState(EMPTY_FRAME)

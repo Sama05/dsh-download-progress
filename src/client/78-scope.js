@@ -79,6 +79,7 @@
               key: task.id || String(index),
               task,
               showSpeed: props.showSpeed,
+              capabilities: props.capabilities,
               ease: props.ease,
               phase: props.phase,
               // The stagger is per session block, so two sessions that start at

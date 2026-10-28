@@ -17,13 +17,15 @@
      *
      * @param {object} task
      */
-    function briefOf(task) {
+    function briefOf(task, capabilities) {
       const bytes = Number(task.bytes) || 0
       const total = Number(task.total)
       const hasTotal = Number.isFinite(total) && total > 0
       const speed = Number(task.speed) || 0
       const rate = fmtSpeed(speed)
       const kind = String(task.kind || '')
+      const source = String(task.progressSource || 'none')
+      const stream = streamState(capabilities)
 
       // Only a download with a known total has a fraction worth drawing. Every
       // other shape would have to invent one. A transfer that has counted no
@@ -33,10 +35,14 @@
       // tick while the job runs on (see the same note in `describe`).
       const staged = kind === 'download' && task.staged === true
       const preparing = kind === 'download' && !staged && bytes === 0 && speed === 0
+      // A `fetch` gets the same bar once the stream sensor measured it, which is
+      // what the depth-progress switch buys. Without a total there is nothing to
+      // draw, so it stays a ring.
+      const measurable =
+        (kind === 'download' && !task.unresolved && !staged && !preparing) ||
+        (kind === 'fetch' && bytes > 0)
       const percent =
-        kind === 'download' && hasTotal && !task.unresolved && !staged && !preparing
-          ? clamp((bytes / total) * 100, 0, 100)
-          : null
+        hasTotal && measurable ? clamp((bytes / total) * 100, 0, 100) : null
 
       if (percent !== null) {
         return {
@@ -80,6 +86,14 @@
       // A download whose total never resolved still knows how much landed.
       if (kind === 'download' && bytes > 0) bits.push(fmtBytes(bytes))
       if (rate) bits.push(rate)
+      // One phrase about the unmeasurable case, in a bubble that has room for it.
+      // Only a stream-shaped task can be helped by the switch; saying "turn it on"
+      // over an install would be a promise nothing can keep.
+      if (source === 'stream') {
+        if (stream === 'off') bits.push('可开启深度进度')
+        else if (stream === 'unavailable') bits.push('环境不支持深度进度')
+        else if (stream === 'degraded') bits.push('深度进度已降级')
+      }
       return {
         shape: 'ring',
         percent: null,
@@ -259,7 +273,9 @@
       // which is exactly when "the agent is waiting" is the useful message.
       const head = mine[0]
       const bg = head ? null : backgroundBrief(mineBackground)
-      const brief = head ? briefOf(head) : bg || IDLE_BRIEF
+      // `streamState` lives in 70-views.js; every fragment shares one closure, so
+      // the chip and the card cannot disagree about what the switch is doing.
+      const brief = head ? briefOf(head, frame.capabilities) : bg || IDLE_BRIEF
       const extra = mine.length - 1
 
       const style = themeTokens(settings.theme) || undefined

@@ -78,6 +78,55 @@
     }
 
     /**
+     * 这一帧的能力状态，是四个已知值之一。
+     *
+     * 老 Host 不送 `capabilities`，那就按 `'off'` 处理：与「用户没开」同义，
+     * 界面的说法仍然是「可以打开」，而不是「不支持」。反过来，任何不认识的值
+     * 也退成 `'off'`，因为「去打开试试」在这三种说法里是最不容易误导人的。
+     *
+     * @param {unknown} capabilities
+     * @returns {'off'|'ok'|'unavailable'|'degraded'}
+     */
+    function streamState(capabilities) {
+      const value = capabilities && capabilities.stream
+      if (value === 'ok' || value === 'unavailable' || value === 'degraded') return value
+      return 'off'
+    }
+
+    /**
+     * 一句「为什么没有百分比」。
+     *
+     * 只在确实拿不到分数时产出，而且只在**这条任务本来可以**有分数时才提到
+     * 深度进度：给一个安装卡片说「打开深度进度吧」是在骗人，那条路本来就没有
+     * 字节流。
+     *
+     * 四种状态必须是四种说法，因为它们对用户意味着完全不同的行动：
+     *
+     *   off          → 你能打开它
+     *   ok           → 已经开着，在等字节（或正在建立连接）
+     *   unavailable  → 开着也没用，这个环境不支持
+     *   degraded     → 开了，但装不上，已降级
+     *
+     * 把 `unavailable` / `degraded` 说成「去打开」是这一层最容易犯的错：用户照做
+     * 之后还是一样，只会认为插件坏了。
+     *
+     * @param {object} ctx
+     * @returns {string}
+     */
+    function noPercentHint(ctx) {
+      if (ctx.hasTotal) return ''
+      // 磁盘采样的下载没有 total 只是「服务端没给 content-length」，深度进度
+      // 也救不了它；安装、包管理更没有字节流可数。
+      if (ctx.progressSource !== 'stream') return ''
+      if (ctx.stream === 'ok') {
+        return ctx.bytes === 0 ? '正在建立连接...' : ''
+      }
+      if (ctx.stream === 'unavailable') return '当前环境不支持深度进度'
+      if (ctx.stream === 'degraded') return '深度进度开启失败，已降级为仅计时'
+      return '打开「深度进度」可显示百分比'
+    }
+
+    /**
      * Flatten one wire task into everything a card needs.
      *
      * Numbers are coerced once, here, so `Card` never re-parses `task.bytes` /
@@ -102,6 +151,10 @@
         log: logOf(task),
         unresolved: task.unresolved === true,
         staged: task.staged === true,
+        // Which layer is measuring this shape, and whether the measuring layer
+        // that would help is on. The pair decides the "why no percentage" line.
+        progressSource: String(task.progressSource || 'none'),
+        stream: streamState(options && options.capabilities),
       }
       ctx.hasTotal = Number.isFinite(ctx.total) && ctx.total > 0
       // Nothing measured yet and nothing moving: the transfer has not produced a
@@ -116,6 +169,9 @@
       // its first bitmap save. A genuinely finished task has bytes > 0 and never
       // reaches here; one that died at zero retires within a few ticks.
       ctx.preparing = ctx.bytes === 0 && ctx.speed === 0
+      // Why there is no score. Computed once here so every surface — the card and
+      // the composer chip — says the same thing about the same state.
+      ctx.hint = noPercentHint(ctx)
 
       const build = VIEWS[ctx.kind] || fallbackView
       const { name, meta } = build(ctx)
@@ -124,7 +180,12 @@
       const percent =
         ctx.kind === 'download' && ctx.hasTotal
           ? clamp((ctx.bytes / ctx.total) * 100, 0, 100)
-          : null
+          : // A `fetch` has bytes and a total once the stream sensor is on, and
+            // it deserves the same bar a download gets — that is the whole point
+            // of the switch. Without a total there is nothing to draw.
+            ctx.kind === 'fetch' && ctx.hasTotal
+            ? clamp((ctx.bytes / ctx.total) * 100, 0, 100)
+            : null
 
       return {
         name,
@@ -132,6 +193,11 @@
         percent,
         determinate: percent !== null,
         log: ctx.log,
+        hint: ctx.hint,
+        // One short label for where the number came from, empty when the number
+        // needs no explanation (a disk-sampled download is the obvious case).
+        sourceLabel:
+          ctx.progressSource === 'stream' && ctx.stream === 'ok' ? 'HTTP 流观测' : '',
       }
     }
 
@@ -141,7 +207,10 @@
 
     function Card(props) {
       const task = props.task || {}
-      const view = describe(task, { showSpeed: props.showSpeed })
+      const view = describe(task, {
+        showSpeed: props.showSpeed,
+        capabilities: props.capabilities,
+      })
       const percent = view.percent
       const phase = props.phase === 'out' ? 'out' : 'in'
       const delay = phase === 'in' ? Math.max(0, Number(props.index) || 0) * STAGGER_MS : 0
@@ -171,6 +240,9 @@
           ),
           percent === null ? null : h('span', { className: 'ddp-tip' }, percent.toFixed(1) + '%'),
         ),
+        // Why there is no percentage. Rendered only when `describe()` produced a
+        // reason, so a working bar never grows an extra line.
+        view.hint ? h('div', { className: 'ddp-hint' }, view.hint) : null,
         view.log ? h('div', { className: 'ddp-log' }, view.log) : null,
       )
     }
