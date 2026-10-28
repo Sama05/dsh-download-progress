@@ -11,12 +11,13 @@
  *   state.js    task bookkeeping, the 1 s sampler, the snapshot shape
  *   index.js    wiring only (events, route, plugin export)  ← this file
  */
-import { classify } from './detect.js'
+import { classify, probeModules } from './detect.js'
 import {
   BUILD_TAG,
   beginTask,
   noteInstallLog,
   noteInstallPhase,
+  noteStreamBytes,
   setTitleResolver,
   snapshot,
   sweep,
@@ -36,9 +37,20 @@ import {
   setTitleLookup,
 } from './background.js'
 import { text } from './utils.js'
+import { depthProgress, setDepthProgress } from './sensor/config.js'
+import { installStreamSensor, streamInstalled } from './sensor/stream.js'
 
 /** Where the Client half polls. Served by the host's own web server. */
 const ROUTE_PATH = '/download-progress/state'
+
+/**
+ * The write route for the depth-progress switch.
+ *
+ * Deliberately separate from the polling route: the state route is read-only and
+ * cached by nobody, and mixing a POST into it would make every client poll a
+ * potential write.
+ */
+const CONFIG_PATH = '/download-progress/config'
 
 /** Sampling period. Matches the client's poll rate so no byte growth is missed. */
 const TICK_MS = 1000
@@ -106,6 +118,36 @@ function makeTitleResolver(ctx) {
       return ''
     }
   }
+}
+
+/**
+ * Runtime capabilities, sent on every frame.
+ *
+ * `stream` has four values and they must not be collapsed:
+ *
+ *   `off`          the user has not turned the switch on  → "you can turn this on"
+ *   `unavailable`  this host cannot install hooks at all  → "turning it on will not help"
+ *   `degraded`     the switch is on but the install failed → "it tried and fell back"
+ *   `ok`           installed and measuring
+ *
+ * The client words each one differently, because telling a user to flip a switch
+ * that cannot work is worse than saying nothing.
+ *
+ * @returns {{modules: string, stream: string}}
+ */
+function capabilities() {
+  let modules = 'unavailable'
+  try {
+    modules = probeModules().hooks ? 'ok' : 'unavailable'
+  } catch {
+    /* a probe that throws is one missing capability, not a failed plugin */
+  }
+  let stream = 'off'
+  if (depthProgress()) {
+    if (modules !== 'ok') stream = 'unavailable'
+    else stream = streamInstalled() ? 'ok' : 'degraded'
+  }
+  return { modules, stream }
 }
 
 /**
@@ -197,7 +239,6 @@ export function apply(ctx) {
   // Plugin installs: pnpm streams log chunks and phase changes, no byte counts.
   ctx.on('plugin-manager/install-log', noteInstallLog)
   ctx.on('plugin-manager/install-state', noteInstallPhase)
-
   /* ---- background work: jobs, subagents, workflows ---- */
 
   // Bash background jobs. `owners: 'all'` is the only filter that spans
@@ -251,6 +292,80 @@ export function apply(ctx) {
   ctx.on('workflow/log', noteWorkflowLog)
   ctx.on('workflow/end', noteWorkflowEnd)
 
+  // The depth-progress sensor. Its lifecycle follows the switch, so it is
+  // re-checked on a timer rather than driven by an event: the POST route only
+  // flips a boolean, and one place that reads it is easier to reason about than
+  // a callback chain. A host that cannot install hooks reports `unavailable` and
+  // never tries again — the probe is memoised.
+  ctx.effect(() => {
+    let dispose = null
+    const sync = () => {
+      try {
+        if (depthProgress() && !dispose) {
+          dispose = installStreamSensor({ onBytes: noteStreamBytes })
+        } else if (!depthProgress() && dispose) {
+          dispose()
+          dispose = null
+        }
+      } catch {
+        /* a sensor that cannot install is a degraded capability, not a crash */
+        dispose = null
+      }
+    }
+    sync()
+    const timer = setInterval(sync, TICK_MS)
+    return () => {
+      clearInterval(timer)
+      try {
+        if (typeof dispose === 'function') dispose()
+      } catch {
+        /* already disposed */
+      }
+    }
+  })
+
+  // The switch's only write path. The client owns the truth (localStorage) and
+  // POSTs here on every change and on mount, so a restarted plugin converges to
+  // the user's choice within one round trip.
+  //
+  // Every body answers 204: a malformed request must not put an error in front
+  // of a user who only moved a toggle.
+  ctx.effect(() =>
+    ctx.webServer.register({
+      kind: 'exact',
+      path: CONFIG_PATH,
+      handler: (req, res) => {
+        const answer = () => {
+          try {
+            res.writeHead(204)
+            res.end()
+          } catch {
+            /* the connection went away first */
+          }
+        }
+        let raw = ''
+        try {
+          req.on('data', (chunk) => {
+            // A body larger than this is not a switch flip; keep reading (so the
+            // request can complete) but stop accumulating.
+            if (raw.length <= 4096) raw += String(chunk)
+          })
+          req.on('end', () => {
+            try {
+              const body = raw && raw.length <= 4096 ? JSON.parse(raw) : null
+              if (body && typeof body === 'object') setDepthProgress(body.depthProgress)
+            } catch {
+              /* malformed JSON keeps the current state */
+            }
+            answer()
+          })
+        } catch {
+          answer()
+        }
+      },
+    }),
+  )
+
   // The snapshot route the Client half polls. `no-store` because the body is
   // meaningless one second later.
   ctx.effect(() =>
@@ -263,13 +378,19 @@ export function apply(ctx) {
           body = JSON.stringify({
             schemaVersion: SCHEMA_VERSION,
             buildTag: BUILD_TAG,
+            capabilities: capabilities(),
             tasks: snapshot(),
             background: backgroundSnapshot(),
           })
         } catch {
           // A task with a circular reference would be a bug, but the overlay
           // must never blank out because of it.
-          body = JSON.stringify({ schemaVersion: SCHEMA_VERSION, tasks: [], background: [] })
+          body = JSON.stringify({
+            schemaVersion: SCHEMA_VERSION,
+            capabilities: capabilities(),
+            tasks: [],
+            background: [],
+          })
         }
         res.writeHead(200, {
           'content-type': 'application/json; charset=utf-8',

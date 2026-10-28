@@ -58,6 +58,13 @@ export function sweep(now, isSessionBusy = null) {
       task.targets.length === 0 ||
       task.idleTicks >= IDLE_TICKS_TO_CLOSE
 
+    // A `fetch` / search task has no file to sample, so `sample()` returns early
+    // and `idleTicks` would stay at 0 forever — its card would never retire. The
+    // stream sensor sets `streamDone` when the body ends; that, or the elapsed
+    // ceiling, is what settles it.
+    const streamSettled =
+      task.progressSource === 'stream' && (task.streamDone === true || task.done)
+
     // `busy` is per session, not per job: one long background download keeps
     // every finished card in that session alive forever. Only a download that is
     // still demonstrably moving earns the grace — an install card is driven by
@@ -81,6 +88,15 @@ export function sweep(now, isSessionBusy = null) {
     const busyGrace = busy && (task.kind !== 'download' || moving || task.staged === true)
 
     if (task.done && quiet && !busyGrace) {
+      if (!task.expiresAt) task.expiresAt = now + LINGER_MS
+      if (now >= task.expiresAt) tasks.delete(id)
+    }
+
+    // A stream-measured card never grows a file, so the download branch above
+    // cannot retire it. It retires when the body ended (the sensor said so) or
+    // when the tool call returned and the sensor never reported a completion —
+    // a cancelled fetch, or a build without the switch on.
+    if (streamSettled && !busyGrace) {
       if (!task.expiresAt) task.expiresAt = now + LINGER_MS
       if (now >= task.expiresAt) tasks.delete(id)
     }

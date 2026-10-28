@@ -79,6 +79,28 @@ export function beginTask(exec, plan, cwd) {
     // whole-minute jumps rather than continuously.
     lastGrowthAt: 0,
     expiresAt: 0,
+    // Which layer is measuring this task, so the client can explain a card that
+    // has no percentage instead of leaving it blank. `file` is the disk sampler,
+    // `stream` is the undici wrapper, `none` means neither can see this kind of
+    // work at all (installs, package managers).
+    progressSource: 'none',
+    // The URL a stream sensor can match its byte events against. Only `fetch`
+    // and `search` set it: a disk-sampled download is matched by path instead,
+    // and an install has no URL at all.
+    url: '',
+  }
+
+  // `web_fetch` and the search tools hand the host a URL and get bytes back over
+  // HTTP; nothing lands on disk, so the only measurement available is the stream
+  // sensor. A download resolves real target paths and is sampled from the file
+  // system, which works whether or not the switch is on.
+  if (plan.kind === 'fetch' || plan.kind === 'search') {
+    // `detail` carries the full argument (`classify()` clips only `label`), so a
+    // long URL still matches the stream event exactly.
+    task.url = text(plan.detail)
+    task.progressSource = 'stream'
+  } else if (plan.kind === 'download') {
+    task.progressSource = 'file'
   }
 
   if (plan.kind === 'download') {

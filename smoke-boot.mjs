@@ -24,14 +24,20 @@ const ctx = {
 
 mod.apply(ctx)
 
-console.log('routes registered=' + registered.length + ' path=' + registered[0]?.path + ' kind=' + registered[0]?.kind)
-assert.equal(registered.length, 1, 'exactly one route')
-assert.equal(registered[0].path, '/download-progress/state')
-assert.equal(registered[0].kind, 'exact')
+console.log('routes registered=' + registered.length + ' :: ' + registered.map((r) => r.path + ' ' + r.kind).join(', '))
+// Two routes: the read-only snapshot the client polls, and the switch's single
+// write path. Anything else appearing here is a change to the plugin's surface.
+assert.equal(registered.length, 2, 'exactly two routes: state + config')
+const stateRoute = registered.find((route) => route.path === '/download-progress/state')
+const configRoute = registered.find((route) => route.path === '/download-progress/config')
+assert.ok(stateRoute, 'the snapshot route must exist')
+assert.ok(configRoute, 'the switch route must exist')
+assert.equal(stateRoute.kind, 'exact')
+assert.equal(configRoute.kind, 'exact')
 console.log('events subscribed=' + new Set(listeners).size + ' :: ' + [...new Set(listeners)].join(','))
 
 // Drive the handler the way the web server does and read the body back.
-const route = registered[0]
+const route = stateRoute
 const body = await new Promise((resolve, reject) => {
   const res = {
     headers: null,
@@ -52,6 +58,6 @@ assert.ok(Array.isArray(parsed.tasks) && Array.isArray(parsed.background))
 
 // Effects must be safe to run and to dispose.
 console.log('effects started=' + effects.length + ' listeners=' + listeners.length)
-console.log('HOST BOOT OK — apply wires one route, the handler answers 200, effects settle')
+console.log('HOST BOOT OK — apply wires two routes, the handler answers 200, effects settle')
 // apply() starts the sampler timer; nothing else keeps the loop alive.
 process.exit(0)
