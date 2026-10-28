@@ -372,7 +372,7 @@ const debugToggle = checkboxes.find((c) => c.node.props['aria-label'] === '调�
 
 // The depth-progress switch must exist, default off, and say what it costs.
 const depthToggle = checkboxes.find(
-  (c) => c.node.props['aria-label'] === '深度进度（包装宿主 HTTP 客户端）',
+  (c) => c.node.props['aria-label'] === '启用深度进度（需重启应用生效）',
 )
 if (!depthToggle) throw new Error('settings page is missing the depth-progress switch')
 if (depthToggle.node.props.checked !== false)

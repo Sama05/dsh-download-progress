@@ -225,6 +225,41 @@ await testAsync('没有 onBytes 回调时直接返回 null（没有消费者的�
   assert.equal(installStreamSensor(null), null)
 })
 
+await testAsync('gate 关着时一个字节事件都不产生，但 body 照样完整', async () => {
+  // 这条测的是「钩子常驻不带来开销」这个承诺。钩子必须在插件启动时就装
+  // （见 sensor/config.js），所以关着开关时它仍然挂着；如果门控失效，用户的
+  // 每个 HTTP 响应都会被多读一遍流。
+  let gateOpen = false
+  const seen = []
+  const dispose = installStreamSensor({
+    onBytes: (e) => seen.push(e),
+    gate: () => gateOpen,
+  })
+  assert.equal(typeof dispose, 'function')
+  try {
+    const url = await slowUrl()
+    const undici = await importUndici()
+
+    // 门关着：消费完整 body，一个事件都不该来。
+    const res = await undici.fetch(url)
+    const buf = Buffer.from(await res.arrayBuffer())
+    assert.equal(buf.length, TOTAL, 'the body must still be complete while gated off')
+    await new Promise((r) => setTimeout(r, 250))
+    assert.equal(seen.length, 0, 'gated off must produce zero byte events, got ' + seen.length)
+
+    // 开门：同一个包装函数立刻开始记字节。
+    gateOpen = true
+    const res2 = await undici.fetch(url)
+    const buf2 = Buffer.from(await res2.arrayBuffer())
+    assert.equal(buf2.length, TOTAL, 'the body must be complete while gated on')
+    await new Promise((r) => setTimeout(r, 250))
+    assert.ok(seen.length >= 2, 'gated on must produce events, got ' + seen.length)
+    assert.equal(seen[seen.length - 1].bytes, TOTAL, 'and must reach the total')
+  } finally {
+    dispose()
+  }
+})
+
 if (slowServer) slowServer.srv.close()
 if (fakeUndici) rmSync(fakeUndici.dir, { recursive: true, force: true })
 console.log(`\n${passed} passed, ${failures.length} failed`)

@@ -2787,8 +2787,8 @@ window.__ModuleLoader__.load({
           onChange: (next) => set({ showSpeed: next }),
         }),
         toggleRow({
-          label: '深度进度（包装宿主 HTTP 客户端）',
-          hint: '关闭（默认）：能落盘的下载（curl / wget / aria2c / git clone / BITS）靠文件大小算进度；网页抓取、搜索这类不落盘的仍然只有计时。打开：在宿主进程里包装 undici 的 fetch，把响应体读成可计数的流，抓取也有百分比。代价是宿主每次 import 都要多走一层 load 钩子，并且这是对宿主内部实现的依赖——宿主升级换了打包方式就会降级为关闭状态，不会崩。',
+          label: '启用深度进度（需重启应用生效）',
+          hint: '关闭（默认）：能落盘的下载（curl / wget / aria2c / git clone / BITS）靠文件大小算进度；网页抓取、搜索这类不落盘的仍然只有计时。打开后，网页抓取与搜索也有百分比——插件在宿主进程里包住 HTTP 客户端的 fetch，把响应体读成可计数的流。⚠ 这个开关改完要重启应用才生效：包装必须在 HTTP 客户端模块第一次被加载时注入，而宿主启动早期就加载了它，已经加载过的模块无法回头再包。拨开关当下不会有任何变化，重启后才开始记字节。',
           checked: settings.depthProgress,
           onChange: (next) => set({ depthProgress: next }),
         }),

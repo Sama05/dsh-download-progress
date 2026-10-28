@@ -297,16 +297,28 @@ export function apply(ctx) {
   // flips a boolean, and one place that reads it is easier to reason about than
   // a callback chain. A host that cannot install hooks reports `unavailable` and
   // never tries again — the probe is memoised.
+  // The depth-progress sensor. Installed at plugin start, not when the switch is
+  // flipped — and that ordering is load-bearing, not a style choice:
+  //
+  //   - the hook rewrites undici's source through `Module.registerHooks`' `load`
+  //     hook, and undici is CJS;
+  //   - a CJS cache hit does NOT run the `load` hook at all (measured: register
+  //     after loading → hits = 0, see docs/probe/late-hook.mjs);
+  //   - the host imports undici long before a user can find the settings page.
+  //
+  // So installing on switch-on misses the injection permanently while still
+  // reporting success — that was the live bug: `capabilities.stream = ok` with
+  // zero byte events. Installing here means the wrapper is in place from the
+  // start; the switch only decides whether `noteStreamBytes` is fed, and the
+  // wrapper passes the body straight through when it is off.
   ctx.effect(() => {
     let dispose = null
     const sync = () => {
+      // One install, never re-installed: `installStreamSensor` is idempotent, and
+      // a hook that came off cannot come back for an already-loaded module.
+      if (dispose) return
       try {
-        if (depthProgress() && !dispose) {
-          dispose = installStreamSensor({ onBytes: noteStreamBytes })
-        } else if (!depthProgress() && dispose) {
-          dispose()
-          dispose = null
-        }
+        dispose = installStreamSensor({ onBytes: noteStreamBytes, gate: depthProgress })
       } catch {
         /* a sensor that cannot install is a degraded capability, not a crash */
         dispose = null

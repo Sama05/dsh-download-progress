@@ -50,15 +50,27 @@ const UNDICI_SUFFIX = '/undici/index.js'
 const SINK = Symbol.for('dsh-download-progress.stream-sink')
 
 /**
+ * 开关槽：包装片段问「现在要不要记字节」。
+ *
+ * 为什么单独一个槽而不是把门控塞进 `SINK`：门控必须发生在**建流之前**。
+ * 如果只在 sink 里判断，`getReader()` 和 `ReadableStream` 都已经造好了，
+ * 开关关着时每个宿主 HTTP 响应仍然多走一遍流管道 —— 那是真实开销，
+ * 不是一个布尔检查。
+ */
+const GATE = Symbol.for('dsh-download-progress.stream-gate')
+
+/**
  * 注入到 undici 源码末尾的包装片段。
  *
  * 写成字符串是因为它要成为被 require 的模块的一部分 —— 这是 hook 的全部意义：
  * 在**那个模块自己的**作用域里替换它导出的 `fetch`，而不是在外部猜它的导出形状。
  *
- * 三个必须：
+ * 四个必须：
  *   - 用 `new Response(...)` 重包，不改原 body（见文件头）。
  *   - 任何异常都 `return res`，绝不让包装层成为宿主 HTTP 的错误来源。
  *   - 通过全局 Symbol 槽回传事件，因为片段跑在另一个模块作用域里。
+ *   - 开关关着时**原样返回 res**，不建流、不读一个字节。钩子常驻是必须的
+ *     （见 sensor/config.js 的注释），但常驻不等于有开销。
  */
 const WRAPPER = `
 ;(function () {
@@ -70,8 +82,13 @@ const WRAPPER = `
     M.fetch = async function ddpFetch(input, init) {
       var res = await realFetch.apply(this, arguments)
       try {
+        // 槽有三种状态：函数（记字节）、假值（开关关着）、不存在（没装）。
+        // 关着时一个字节都不该多读 —— 直接交回原响应。
         var sink = globalThis[Symbol.for('dsh-download-progress.stream-sink')]
         if (typeof sink !== 'function' || !res || !res.body) return res
+        // 门控在建流之前：关着就原样交回，不 getReader、不造 ReadableStream。
+        var gate = globalThis[Symbol.for('dsh-download-progress.stream-gate')]
+        try { if (typeof gate === 'function' && !gate()) return res } catch (e) { return res }
         var url = typeof input === 'string' ? input : (input && input.url) || ''
         var total = Number(res.headers.get('content-length')) || 0
         var reader = res.body.getReader()
@@ -109,7 +126,10 @@ let active = null
 /**
  * 装上深度进度传感器。
  *
- * @param {{onBytes?: (event: {url: string, bytes: number, total: number, done: boolean}) => void}} options
+ * @param {{
+ *   onBytes?: (event: {url: string, bytes: number, total: number, done: boolean}) => void,
+ *   gate?: () => boolean,
+ * }} options
  * @returns {null | (() => void)} 装不上返回 null；否则返回幂等的卸装函数
  */
 export function installStreamSensor(options) {
@@ -117,6 +137,13 @@ export function installStreamSensor(options) {
 
   const onBytes = options && typeof options.onBytes === 'function' ? options.onBytes : null
   if (!onBytes) return null
+
+  // `gate` 让开关关着时包装层也原样透传。
+  //
+  // 钩子必须在插件启动时就装（原因见 sensor/config.js），但「常驻」不该等于
+  // 「一直在读字节」。门关着时把槽设成假值，包装片段看到非函数就立刻 return res
+  // —— 不建流、不 getReader、一个字节都不多读。
+  const gate = options && typeof options.gate === 'function' ? options.gate : () => true
 
   try {
     if (!probeModules().hooks) return null
@@ -142,9 +169,18 @@ export function installStreamSensor(options) {
       /* 消费者抛错不能回到流里 */
     }
   }
+  // 槽本身是一个函数，它只把事件转给 sink —— 但**门关着时它仍然会被调用**。
+  // 所以真正的门槛放在包装片段里：它先看槽是不是函数，是函数才建流。为了让
+  // 「门关着」在片段那边表现为假值，这里传一个会自己缩回去的门控函数。
+  //
+  // 简化：门控放在 sink 里不够（那时流已经建好了），所以改成在片段里查一个
+  // 独立的布尔槽。见 GATE。
   const hadSink = Object.prototype.hasOwnProperty.call(globalThis, SINK)
   const previousSink = globalThis[SINK]
+  const hadGate = Object.prototype.hasOwnProperty.call(globalThis, GATE)
+  const previousGate = globalThis[GATE]
   globalThis[SINK] = sink
+  globalThis[GATE] = gate
 
   let hooks = null
   try {
@@ -185,16 +221,17 @@ export function installStreamSensor(options) {
   //
   // 所以 `streamInstalled()` 是一个**持续判断**，不是一次性的开关。
 
-  let disposed = false
+  const disposed = { value: false }
   const dispose = () => {
-    if (disposed) return
-    disposed = true
+    if (disposed.value) return
+    disposed.value = true
     try {
       hooks.deregister()
     } catch {
       /* 已经卸掉 */
     }
     restoreSink(hadSink, previousSink)
+    restoreGate(hadGate, previousGate)
     active = null
   }
   active = { dispose, sawEvent: false, wrapped: () => proveInjection() }
@@ -295,6 +332,19 @@ function restoreSink(had, previous) {
   try {
     if (had) globalThis[SINK] = previous
     else delete globalThis[SINK]
+  } catch {
+    /* 全局对象被冻结：没有可恢复的东西 */
+  }
+}
+
+/**
+ * @param {boolean} had
+ * @param {unknown} previous
+ */
+function restoreGate(had, previous) {
+  try {
+    if (had) globalThis[GATE] = previous
+    else delete globalThis[GATE]
   } catch {
     /* 全局对象被冻结：没有可恢复的东西 */
   }
