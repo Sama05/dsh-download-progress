@@ -122,11 +122,28 @@ plugin_manager action=remove_bundle target="@local/dsh-download-progress"
 
 插件安装（`pnpm` / `npm` / `yarn`）、网页抓取、`research` / `web_search` 类搜索工具、其他包管理器命令（`pip` / `uv` / `docker pull` / `ollama pull`）、`Start-BitsTransfer`。
 
-> **「启用深度进度」开关**（设置页，默认关，**改完需重启应用生效**）：打开后，网页抓取与搜索这类**不落盘**的 HTTP 请求也能拿到字节数与百分比。做法是在宿主进程里用 `Module.registerHooks` 把 `undici` 的 `fetch` 包一层，把响应体读成可计数的流再原样交回去（新 `Response` 重包，不改原 body，所以宿主自己的 `res.arrayBuffer()` 照常可用）。
+> **「启用深度进度」开关**（设置页，默认关，**改完需重启应用生效**）：打开后，网页抓取与搜索这类**不落盘**的 HTTP 请求也能拿到字节数与百分比。
 >
-> **为什么必须重启**：包装只能在一个模块**第一次被加载**时注入，而 undici 是 CJS 包——缓存命中时 `load` 钩子根本不触发（实测：已加载后再注册钩子，命中 0 次）。宿主启动早期就加载了 undici，所以钩子在插件启动时就装上、常驻，开关只决定「要不要记字节」。关着时包装函数原样透传：不建流、不 `getReader`、一个字节都不多读。
+> **两层并列，不是二选一**——Node 里有两种互不相通的 HTTP 实现：
 >
-> 卡片会明确说清自己是哪一种状态，不让用户去拨一个没用的开关：关着 → 「打开『深度进度』可显示百分比」；开着且生效 → 不显示提示，直接出百分比；宿主不支持（Node < 22.15，无 `registerHooks`）→ 「当前环境不支持深度进度」；开着但注入没发生 → 「深度进度开启失败，已降级为仅计时」。最后这条由 `streamInstalled()` 自证：它去查宿主那份 undici 的 `fetch` 是不是自己的包装函数，不是就如实报降级，不谎报 ok。
+> | 层 | 覆盖 | 装法 |
+> | --- | --- | --- |
+> | `sensor/stream.js` | 宿主内置 `web_fetch`（走 undici 时）、`fetch()` | `Module.registerHooks` 改写 undici 源码 |
+> | `sensor/https.js` | **`dsh-free-search` 的 `fs-quality-fetch`、`node-fetch` v2、`axios`、`got`、`request`、手写 `https.get`** | 换 `http`/`https` 模块的 `request` 与 `get` 导出 |
+>
+> 本机就是活例子：装了 `dsh-free-search` 之后，`web_fetch` 被它的 `fs-quality-fetch` 接管，实际用 `node:https` 直连（`lib/fetch_provider.js:201` 调 `transport.request`）。只包 undici 的话一个字节都拿不到——诊断字段里 `loaded` 恒为 `false` 就是证据。第二层比第一层稳得多：`http.request` 是 Node 公开 API，装在任何时刻都立即生效，没有缓存时序陷阱。
+>
+> **为什么仍要重启**：第一层（undici）只能在模块第一次被加载时注入，而 undici 是 CJS 包——缓存命中时 `load` 钩子根本不触发。所以钩子在插件启动时就装上、常驻，开关只决定「要不要记字节」。关着时包装函数原样透传：不建流、不 `getReader`、一个字节都不多读。
+>
+> 卡片会明确说清自己是哪一种状态，不让用户去拨一个没用的开关：关着 → 「打开『深度进度』可显示百分比」；开着且任一层生效 → 不显示提示，直接出百分比；两层都装不上 → 「当前环境不支持深度进度」；装了但没测到 → 「深度进度开启失败，已降级为仅计时」。
+>
+> 快照里另有 `stream` 字段把判断依据摊开，排查时不必挂调试器：
+>
+> ```json
+> "stream": { "active": true, "sawEvent": false, "wrapped": false, "loaded": false, "http": true }
+> ```
+>
+> `wrapped` / `loaded` 说 undici 那层，`http` 说 http/https 那层，`sawEvent` 是最硬的证据（收到过字节）。
 
 `Start-BitsTransfer` 单独说明：它先把字节写进同目录的 `BITxxxx.tmp`，跑完才改名成 `-Destination`。所以目标文件在整个传输期间**根本不存在**，任何盯着 `-Destination` 的进度条都只能是 0%。插件把它标成「分段写入」，只显示已耗时和文件名，不画百分比——这是被测出来的写盘形状，不是猜的。
 
