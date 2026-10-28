@@ -69,6 +69,11 @@ const ALLOWED = {
   utils: [],
   script: ['utils.js', 'script.js', 'script/'],
   detect: ['utils.js', 'detect.js', 'detect/'],
+  // `sensor` sits below `state` on purpose: a sensor produces events and does
+  // not know the task map exists. Turning stream bytes into card bytes is
+  // wiring-layer work (index.js), so there is exactly one place that mutates a
+  // card. A sensor reaching into `state/` would give that a second author.
+  sensor: ['utils.js', 'detect.js', 'sensor/'],
   plan: ['utils.js', 'detect.js', 'script.js', 'plan/'],
   state: ['utils.js', 'detect.js', 'plan.js', 'plan/', 'state/'],
   background: ['utils.js', 'background.js', 'background/'],

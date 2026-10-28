@@ -31,7 +31,7 @@
     "build": "node scripts/build-client.mjs",
     "build:check": "node scripts/build-client.mjs --check",
     "prepublishOnly": "node scripts/build-client.mjs --check",
-    "test": "node scripts/build-client.mjs --check && node architecture.mjs && node contract.mjs && node test/features.test.mjs && node script.test.mjs && node smoke-boot.mjs && node smoke.mjs && node smoke-host.mjs && node stress-host.mjs && node stress-round2.mjs && node stress-client.mjs",
+    "test": "node scripts/build-client.mjs --check && node architecture.mjs && node contract.mjs && node test/features.test.mjs && node test/stream-sensor.test.mjs && node script.test.mjs && node smoke-boot.mjs && node smoke.mjs && node smoke-host.mjs && node stress-host.mjs && node stress-round2.mjs && node stress-client.mjs",
     "contract": "node contract.mjs",
     "bench": "node bench.mjs"
   },
@@ -42,6 +42,7 @@
     "plan.js",
     "plan/",
     "detect/",
+    "sensor/",
     "state.js",
     "state/",
     "script.js",
