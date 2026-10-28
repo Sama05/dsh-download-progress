@@ -441,6 +441,15 @@ window.__ModuleLoader__.load({
      line sat on whatever was behind it and stopped being readable. */
   opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
+/* "Why there is no percentage" — same weight and dimness as the log line, but it
+   is the only line that tells the user to act, so it is not allowed to be
+   truncated away: it wraps to at most two lines instead. */
+.ddp-hint{
+  margin-top:4px;font-size:11px;line-height:1.35;
+  color:var(--ddp-fg-dim,var(--dsw-alias-label-secondary,#a8a8b0));
+  opacity:.8;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+}
 
 /* Sessions. With downloads from more than one session the list groups them:
    each group is a glass block carrying the session name, and the task cards
