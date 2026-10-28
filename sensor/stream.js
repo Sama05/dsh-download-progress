@@ -325,6 +325,27 @@ function undiciLoaded() {
 }
 
 /**
+ * 传感器内部的三个分项，供诊断。
+ *
+ * `capabilities.stream` 只有 ok / degraded 两个值，回答「能不能用」；真机出问题时
+ * 还需要知道**为什么**：没收到事件？注入没发生？还是 undici 压根还没加载？
+ * 这三个值把 `streamInstalled()` 的判断依据摊开，不必再靠外部探针猜。
+ *
+ * @returns {{active: boolean, sawEvent: boolean, wrapped: boolean, loaded: boolean}}
+ */
+export function streamDiagnostics() {
+  if (active === null) {
+    return { active: false, sawEvent: false, wrapped: false, loaded: undiciLoaded() }
+  }
+  return {
+    active: true,
+    sawEvent: active.sawEvent === true,
+    wrapped: proveInjection(),
+    loaded: undiciLoaded(),
+  }
+}
+
+/**
  * @param {boolean} had 装之前全局槽是否存在
  * @param {unknown} previous 装之前的原值
  */

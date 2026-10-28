@@ -38,7 +38,7 @@ import {
 } from './background.js'
 import { text } from './utils.js'
 import { depthProgress, setDepthProgress } from './sensor/config.js'
-import { installStreamSensor, streamInstalled } from './sensor/stream.js'
+import { installStreamSensor, streamDiagnostics, streamInstalled } from './sensor/stream.js'
 
 /** Where the Client half polls. Served by the host's own web server. */
 const ROUTE_PATH = '/download-progress/state'
@@ -149,7 +149,6 @@ function capabilities() {
   }
   return { modules, stream }
 }
-
 /**
  * @param {{effect: Function, on: Function, get: Function, webServer: {register: Function}}} ctx
  */
@@ -391,6 +390,11 @@ export function apply(ctx) {
             schemaVersion: SCHEMA_VERSION,
             buildTag: BUILD_TAG,
             capabilities: capabilities(),
+            // The three sub-facts behind `capabilities.stream`. Sent so a live
+            // host can be asked *why* a card has no percentage without attaching
+            // a debugger: `wrapped: false, loaded: true` means the injection
+            // missed; `sawEvent: true` means it is definitely working.
+            stream: streamDiagnostics(),
             tasks: snapshot(),
             background: backgroundSnapshot(),
           })

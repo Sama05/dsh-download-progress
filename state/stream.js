@@ -2,27 +2,74 @@
  * 把流传感器报来的字节落到卡片上。
  *
  * 任务与事件的对应靠 URL：`beginTask` 已经把 `web_fetch` / 搜索的 URL 记在
- * `task.url` 上，流事件又带着自己的 `url`。两者相等就是这个任务的进度。
+ * `task.url` 上，流事件又带着自己的 `url`。两者指同一个资源就是这个任务的进度。
  *
- * 不相等的一律忽略 —— 一次 `web_fetch` 期间宿主自己还在发别的请求
- * （客户端轮询状态接口、遥测、插件市场检查），按「最近一条」匹配会把那些字节
- * 记到用户看得见的卡片上，卡片就会在用户没下载任何东西的时候自己动。
+ * ## 为什么不能直接 `!==`
+ *
+ * 曾经这里写的是 `if (task.url !== url) continue`。真机因此一个事件都收不到：
+ *
+ *   - `task.url` 是**模型给的原文**（`args.url`）
+ *   - 事件的 `url` 是 undici `fetch(input)` 收到的那个值，中间隔着 `web_fetch`
+ *     自己的规范化（`new URL(...).href`：统一 scheme/host 大小写、去掉默认端口、
+ *     补齐百分号编码…）
+ *
+ * 两个字符串只要有一个字符不同，严格相等就永远 false —— 卡片在、进度恒 0，
+ * 而且没有任何报错。`test/stream-match.test.mjs` 钉住了这条。
+ *
+ * ## 规范化到什么程度
+ *
+ * 只抹平**语义等价**的差异（RFC 3986：scheme/host 大小写、默认端口、
+ * 百分号编码、hash 片段）。**不动 query 参数顺序**——服务端可以按顺序返回不同
+ * 内容，把那两个当成同一个资源会张冠李戴。
+ *
+ * 规范化失败（非法 URL）时退回原文比较：宁可漏一次，不要把无关字节记到卡上。
  */
 
 import { tasks } from './registry.js'
+
+/** 默认端口表：规范化时把「显式写出默认端口」折成「不写」。 */
+const DEFAULT_PORTS = { 'http:': '80', 'https:': '443', 'ws:': '80', 'wss:': '443' }
+
+/**
+ * 把 URL 折成一个可比较的规范形式。
+ *
+ * @param {string} raw
+ * @returns {string} 规范化后的字符串；解析失败时返回原始输入
+ */
+function canonicalUrl(raw) {
+  const input = String(raw || '')
+  if (!input) return ''
+  let u
+  try {
+    u = new URL(input)
+  } catch {
+    return input
+  }
+  // `URL` 已经把 scheme/host 小写、补全百分号编码；还差两件事：
+  //   1. 去掉默认端口（`https://a:443/` 与 `https://a/` 是同一个资源）
+  //   2. 去掉 hash（不会发到服务端，改它不改变响应）
+  const port = DEFAULT_PORTS[u.protocol] === u.port ? '' : u.port
+  const auth = u.username
+    ? u.username + (u.password ? ':' + u.password : '') + '@'
+    : ''
+  return `${u.protocol}//${auth}${u.hostname}${port ? ':' + port : ''}${u.pathname}${u.search}`
+}
 
 /**
  * @param {{url: string, bytes: number, total: number, done: boolean}} event
  */
 export function noteStreamBytes(event) {
   if (!event || typeof event !== 'object') return
-  const url = String(event.url || '')
-  if (!url) return
+  const raw = String(event.url || '')
+  if (!raw) return
+  const url = canonicalUrl(raw)
   const bytes = Number(event.bytes) || 0
   const total = Number(event.total) || 0
   const done = event.done === true
   for (const task of tasks.values()) {
-    if (task.url !== url) continue
+    // 没有 url 的任务（安装、包管理器）永远不该被字节事件命中。
+    if (!task.url) continue
+    if (canonicalUrl(task.url) !== url) continue
     task.bytes = bytes
     if (total > 0) task.total = total
     // 流观测是活着的：它直接来自正在读的字节，不受 `START_GRACE_MS` 影响。
