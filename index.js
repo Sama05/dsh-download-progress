@@ -51,7 +51,7 @@ const TICK_MS = 1000
  * ships without touching the UI. See CONTRACT.md for the field table and for
  * the rule about who is allowed to read which field.
  */
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
 export const inject = ['webServer']
 

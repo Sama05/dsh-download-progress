@@ -83,7 +83,7 @@ export function forEachTask(kind, mutate) {
  * fresh one at a glance: when the card misbehaves, this is the first thing to
  * read. Keep it in step with `version` in package.json.
  */
-export const BUILD_TAG = '0.3.0'
+export const BUILD_TAG = '0.4.0'
 
 /**
  * The live card already watching a given path in the same session, if any.

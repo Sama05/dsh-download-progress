@@ -129,6 +129,11 @@ export function snapshot() {
       // A download whose target could not be parsed: the client shows an
       // indeterminate "载入中..." bar instead of a fake 0 B / 0 B.
       unresolved: task.kind === 'download' && task.targets.length === 0,
+      // Which layer is measuring this task, so the client can explain a card
+      // that has no percentage instead of leaving it blank. `file` is the disk
+      // sampler, `stream` is the undici wrapper, `none` means neither can see
+      // this kind of work at all.
+      progressSource: task.progressSource || 'none',
     }
   })
 }

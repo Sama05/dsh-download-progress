@@ -25,15 +25,38 @@ index.js   路由 /download-progress/state      views               只吃 view-
 
 `GET /download-progress/state` → 200，`cache-control: no-store`
 
+另有一条写路由，只用于开关，不参与轮询：
+
+`POST /download-progress/config`，body `{"depthProgress": boolean}` → 204。
+Client 在设置变更时以及每次挂载时各 POST 一次；Host 只在内存里记住，不落盘
+（localStorage 是开关的唯一真相源）。
+
 ```json
-{ "schemaVersion": 1, "tasks": [ /* 见下表 */ ] }
+{ "schemaVersion": 2, "capabilities": { "modules": "ok", "stream": "off" }, "tasks": [ /* 见下表 */ ] }
 ```
 
 `schemaVersion` 规则：
 
 - **加字段不升版本。** Client 忽略它不认识的字段，所以新字段可以独立上线。
 - **删字段 / 改语义才升版本。** 并在本文档记录迁移方式。
+- **当前为 `2`。** 1 → 2 的变更：新增顶层 `capabilities` 与每任务 `progressSource`，
+  用于让界面说清「这条为什么没有百分比」。老 Client 读到 2 只按未知字段忽略，不整块空白。
 - Client 永不因为版本号拒绝一帧 —— 老 bundle 遇到新字段只是不显示，不该整块空白。
+
+## 顶层字段
+
+| 字段 | 类型 | 含义 |
+| `schemaVersion` | number | wire 版本，当前 `2` |
+| `buildTag` | string | Host 半边的构建标记，排查缓存旧 bundle 用 |
+| `capabilities` | object | 运行时能力探测结果，见下 |
+| `tasks` | array | 见下文字段表 |
+| `background` | array | 见「后台任务」 |
+
+`capabilities` 的两个键：
+
+| 字段 | 类型 | 含义 |
+| `modules` | string | `Module.registerHooks` 可用性：`ok` / `unavailable` |
+| `stream` | string | 深度进度开关状态：`off`（用户没开）/ `ok`（已开且可用）/ `unavailable`（宿主不支持）/ `degraded`（装上但报错） |
 
 ## 字段表
 
@@ -56,6 +79,7 @@ index.js   路由 /download-progress/state      views               只吃 view-
 | `done` | boolean | 工具调用已返回（文件可能仍在增长） |
 | `staged` | boolean | 下载器先写临时文件、结束时才改名到目标（`Start-BitsTransfer`）：目标不增长，UI 画已耗时而不是 0% 进度条 |
 | `unresolved` | boolean | 是下载但没解析出目标：UI 画不确定态，不画 `0 B / 0 B` |
+| `progressSource` | string | 这条任务的进度从哪来：`file`（磁盘采样）/ `stream`（HTTP 流观测）/ `none`（无法度量） |
 
 ## 谁是 adapter
 
